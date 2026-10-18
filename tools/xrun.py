@@ -74,6 +74,7 @@ def env_for(instance, port, extra):
         "XRECOMP_GPU_BACKEND": "d3d12",
         "XRECOMP_PRESENT_MODE": "immediate",
         "XRECOMP_MC3_MENU_TRACE": "1",
+        "XRECOMP_NATIVE_CONTROLLERS": "0",  # the mod's game-thread hook runs only then (docs/TESTE-ISOLADO)
         # the mod's Vulkan layer: the panel and the captures
         "VK_LAYER_PATH": str(RUN),
         "VK_INSTANCE_LAYERS": "VK_LAYER_MC3COOP_overlay",

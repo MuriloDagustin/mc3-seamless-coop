@@ -46,7 +46,7 @@ constexpr uint64_t kTimeoutMs = 5000;
 
 constexpr uint32_t kMagic = 0x4F43334D;  // "M3CO"
 constexpr uint16_t kProtocol = 2; // terminal won/lost results; all copies must run the same build
-enum Type : uint8_t { kHello = 1, kWelcome, kState, kBye, kDiscover, kOffer, kRoster, kFull, kCar, kRaceStart, kWon, kTraffic, kFinished };
+enum Type : uint8_t { kHello = 1, kWelcome, kState, kBye, kDiscover, kOffer, kRoster, kFull, kCar, kRaceStart, kWon, kTraffic, kFinished, kAi };
 
 #pragma pack(push, 1)
 struct Header {
@@ -390,6 +390,9 @@ void Receive(uint64_t now) {
                     mod::race::OnPartnerFinished(fp.result);
                 }
                 break;
+            case kAi:
+                if (source == 0 && g_cfg.role == Role::Join) mod::ai::Receive(in.raw + sizeof(Header), n - int(sizeof(Header)));
+                break;
             case kTraffic:
                 if (source == 0 && g_cfg.role == Role::Join)
                     mod::traffic::Receive(in.raw + sizeof(Header), n - int(sizeof(Header)));
@@ -452,6 +455,19 @@ void Send(uint64_t now) {
                 if (g_players[i].have && g_players[i].welcomed) {
                     out.h = Make(kTraffic, i, now);
                     SendTo(i, out.raw, int(sizeof(Header) + chunk.size()));
+                }
+        }
+    }
+    static std::vector<std::vector<uint8_t>> opponents;
+    if (g_cfg.role == Role::Host && PlayerCount() > 1 && mod::ai::Snapshot(opponents, now)) {
+        Packet out;
+        for (auto& one : opponents) {
+            if (sizeof(Header) + one.size() > sizeof out.raw) continue;
+            std::memcpy(out.raw + sizeof(Header), one.data(), one.size());
+            for (int i = 1; i < kMaxPlayers; i++)
+                if (g_players[i].have && g_players[i].welcomed) {
+                    out.h = Make(kAi, i, now);
+                    SendTo(i, out.raw, int(sizeof(Header) + one.size()));
                 }
         }
     }

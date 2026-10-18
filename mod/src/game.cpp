@@ -15,7 +15,8 @@
 #include "ai.h"
 #include "settings.h"
 
-extern std::atomic<uint32_t> g_xinput_calls;
+extern std::atomic<uint32_t> g_xinput_calls, g_xinput_guest;
+extern std::atomic<uintptr_t> g_xinput_ret;
 char kImageSha1[41] = {};  // the game identity copies must share (see session.cpp)
 
 namespace mod::game {
@@ -95,7 +96,9 @@ std::string State() {
                   g_ticks.load(), g_xinput_calls.load(), dxgi::Presents(), coop::Status(), car::City(), have,
                   double(p.m[3][0]), double(p.m[3][1]), double(p.m[3][2]), double(-p.m[2][0]), double(-p.m[2][1]),
                   double(-p.m[2][2]), double(speed), double(p.throttle));
-    return std::string(s) + " " + race::Describe() + " " + traffic::Describe() + " " + ai::Describe();
+    char hook[96];
+    std::snprintf(hook, sizeof hook, " xinput_guest=%u xinput_ret=%llX", g_xinput_guest.load(), (unsigned long long)g_xinput_ret.load());
+    return std::string(s) + hook + " " + race::Describe() + " " + traffic::Describe() + " " + ai::Describe();
 }
 
 }  // namespace mod::game

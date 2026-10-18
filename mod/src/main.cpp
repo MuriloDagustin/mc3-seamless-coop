@@ -168,7 +168,8 @@ static FARPROC Real(const char* name_or_ordinal) {
 }
 #define REAL(type, name) reinterpret_cast<type>(Real(name))
 
-std::atomic<uint32_t> g_xinput_calls{0};
+std::atomic<uint32_t> g_xinput_calls{0}, g_xinput_guest{0};
+std::atomic<uintptr_t> g_xinput_ret{0};
 
 static DWORD VirtualState(DWORD user, XINPUT_STATE* state) {
     if (user != 0) return ERROR_DEVICE_NOT_CONNECTED;
@@ -178,26 +179,21 @@ static DWORD VirtualState(DWORD user, XINPUT_STATE* state) {
 
 namespace {
 bool GuestInputContext(uintptr_t returnAddress) {
-    if (!mod::game::GuestInputReturn(returnAddress)) return false;
-    static const bool verified = [] {
-        const auto* base = reinterpret_cast<const uint8_t*>(GetModuleHandleW(nullptr));
-        if (reinterpret_cast<uintptr_t>(base) != mod::game::kRunnerBase) return false;
-        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-        if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0 || dos->e_lfanew > 0x100000) return false;
-        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
-        if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
-            nt->OptionalHeader.SizeOfImage < mod::game::kInputCallOffset + 6) return false;
-        return mod::game::GuestInputBuild(reinterpret_cast<uintptr_t>(base), nt->FileHeader.TimeDateStamp,
-                                          nt->OptionalHeader.SizeOfImage, base + mod::game::kInputCallOffset);
+    static const uintptr_t guest = [] {
+        uintptr_t r = mod::game::FindGuestInputReturn(reinterpret_cast<const uint8_t*>(GetModuleHandleW(nullptr)));
+        if (r) mod::Log("game: guest pad poll returns to %llX", static_cast<unsigned long long>(r));
+        else mod::Log("game: no single guest XInputGetState call in this runner; race/traffic/AI writes off");
+        return r;
     }();
-    return verified;
+    return guest && returnAddress == guest;
 }
 }  // namespace
 
 extern "C" DWORD WINAPI ProxyXInputGetState(DWORD user, XINPUT_STATE* state) {
     g_xinput_calls++;
     const bool guest = GuestInputContext(reinterpret_cast<uintptr_t>(_ReturnAddress()));
-    if (guest) mod::game::FiberTick();
+    g_xinput_ret = reinterpret_cast<uintptr_t>(_ReturnAddress());
+    if (guest) g_xinput_guest++, mod::game::FiberTick();
     DWORD r;
     if (mod::control::Enabled()) r = VirtualState(user, state);
     else {
@@ -214,6 +210,7 @@ extern "C" DWORD WINAPI ProxyXInputGetState(DWORD user, XINPUT_STATE* state) {
 
 extern "C" DWORD WINAPI ProxyXInputGetStateEx(DWORD user, XINPUT_STATE* state) {  // ordinal 100: with the guide button
     g_xinput_calls++;
+    g_xinput_ret = reinterpret_cast<uintptr_t>(_ReturnAddress()) | 1;  // odd: from the Ex entry
     if (mod::control::Enabled()) return VirtualState(user, state);
     auto f = REAL(DWORD(WINAPI*)(DWORD, XINPUT_STATE*), MAKEINTRESOURCEA(100));
     DWORD r = f ? f(user, state) : ERROR_DEVICE_NOT_CONNECTED;

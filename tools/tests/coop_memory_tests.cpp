@@ -16,6 +16,7 @@ static ULONGLONG TestClock() { return test_now; }
 #include "../../mod/src/car.cpp"
 #include "../../mod/src/race.cpp"
 #include "../../mod/src/traffic.cpp"
+#include "../../mod/src/ai.cpp"
 #undef GetTickCount64
 
 static std::vector<uint8_t> ram(0x600000);
@@ -49,14 +50,17 @@ void NativeLocalFinish(bool won,int paid) {
     G<uint8_t>(race+0x0E)=1;W32(rewards+0xBC,paid);
 }
 int main() {
-    uint8_t call[]{0xFF,0x15,0x0C,0x21,0x09,0x02};
-    assert(mod::game::GuestInputReturn(0x1404E35C4ull));
-    assert(!mod::game::GuestInputReturn(0) && !mod::game::GuestInputReturn(0x1404E35C5ull));
-    assert(mod::game::GuestInputBuild(0x140000000ull,0x6AD2B76C,0x500000,call));
-    assert(!mod::game::GuestInputBuild(0x150000000ull,0x6AD2B76C,0x500000,call));
-    assert(!mod::game::GuestInputBuild(0x140000000ull,0,0x500000,call));
-    assert(!mod::game::GuestInputBuild(0x140000000ull,0x6AD2B76C,1,call));
-    call[0]=0;assert(!mod::game::GuestInputBuild(0x140000000ull,0x6AD2B76C,0x500000,call));
+    // the guest pad poll found in each known runner build, mapped as an image only (never run)
+    struct Build { const wchar_t* path; uintptr_t rva; };
+    for (const Build& b : {Build{L"D:/dev/mc3-coop-data/xrun/MC3Runner.exe", 0x305CB4},
+                           Build{L"D:/dev/mc3-coop-data/testgame/Midnight Club 3 DUB Edition Remix/"
+                                 L".xrevive-8c22479443f74b1c5a543f0c5b0f4a7966472812e1caf0f3bb0729d8c3009221.exe", 0x4E35C4}}) {
+        HMODULE m = LoadLibraryExW(b.path, nullptr, DONT_RESOLVE_DLL_REFERENCES);
+        if (!m) continue;  // that build is not on this PC
+        uintptr_t r = mod::game::FindGuestInputReturn(reinterpret_cast<const uint8_t*>(m));
+        assert(r == reinterpret_cast<uintptr_t>(m) + b.rva);
+        FreeLibrary(m);
+    }
     Fixture();
     uint8_t cfg[mod::car::kCarCfgBytes]{};cfg[0xE3]='x';
     mod::car::SetPartnerCar(1,cfg);mod::car::Tick(test_now);
