@@ -28,6 +28,7 @@
 #include "net/coop_net.h"
 #include "net/coop_online.h"
 #include "net/session.h"
+#include "race.h"
 #include "settings.h"
 
 // the game identity copies must share (the XBE's title, version and size, from the guest image), 40 characters
@@ -43,7 +44,7 @@ constexpr uint64_t kTimeoutMs = 5000;
 
 constexpr uint32_t kMagic = 0x4F43334D;  // "M3CO"
 constexpr uint16_t kProtocol = 1;
-enum Type : uint8_t { kHello = 1, kWelcome, kState, kBye, kDiscover, kOffer, kRoster, kFull, kCar };
+enum Type : uint8_t { kHello = 1, kWelcome, kState, kBye, kDiscover, kOffer, kRoster, kFull, kCar, kRaceStart, kWon };
 
 #pragma pack(push, 1)
 struct Header {
@@ -78,6 +79,14 @@ struct State {
 struct CarPacket {  // the sender's own campaign car, the game's CarCfg as it is
     Header h;
     uint8_t cfg[mod::car::kCarCfgBytes];
+};
+struct RacePacket {  // the host started a career race
+    Header h;
+    mod::race::Start start;
+};
+struct WonPacket {  // the sender won the race it shared
+    Header h;
+    uint32_t serial;
 };
 #pragma pack(pop)
 constexpr int kMaxDatagram = 1170;  // also fits the EOS P2P transport
@@ -125,6 +134,22 @@ struct Participant {
     State remote{};
 };
 std::array<Participant, kMaxPlayers> g_players;
+
+// the race events, sent a few times each (UDP loses some): the receivers know them by their serials
+struct Repeat {
+    uint8_t raw[1200];
+    int bytes = 0, left = 0;
+    uint64_t next = 0;
+};
+std::array<Repeat, 4> g_repeats;
+void Queue(const void* data, int bytes) {
+    for (auto& r : g_repeats)
+        if (!r.left) {
+            std::memcpy(r.raw, data, size_t(bytes));
+            r.bytes = bytes, r.left = 6, r.next = 0;
+            return;
+        }
+}
 
 // the race-setup slot a partner's car takes in this copy's world: the local player is slot 0, the others 1.. in
 // player order
@@ -191,6 +216,7 @@ void Sample(State& s, int to, uint64_t now) {
 }
 
 void Forget(int player) {
+    mod::race::OnPartnerGone();
     mod::car::Remove(SlotOf(player));
     g_players[player] = {};
 }
@@ -267,7 +293,7 @@ void Receive(uint64_t now) {
             source = slot;
             if (destination != 0) {  // for another client: pass it on
                 if (destination >= kMaxPlayers || destination == source || !g_players[destination].have ||
-                    in.h.session != g_players[source].session || (in.h.type != kState && in.h.type != kCar))
+                    in.h.session != g_players[source].session || (in.h.type != kState && in.h.type != kCar && in.h.type != kWon))
                     continue;
                 g_players[source].last_rx = now;
                 net::Send(g_players[destination].endpoint, &in, n);
@@ -340,6 +366,16 @@ void Receive(uint64_t now) {
                     mod::car::SetPartnerCar(SlotOf(source), car.cfg);
                 }
                 break;
+            case kRaceStart:
+                if (n == int(sizeof(RacePacket)) && source == 0) {
+                    RacePacket rp;
+                    std::memcpy(&rp, &in, sizeof rp);
+                    mod::race::OnStart(rp.start);
+                }
+                break;
+            case kWon:
+                if (n == int(sizeof(WonPacket))) mod::race::OnPartnerWon(reinterpret_cast<WonPacket&>(in).serial);
+                break;
             case kBye:
                 LOGR("coop: player %d left", source + 1);
                 if (g_cfg.role == Role::Host) Forget(source);
@@ -350,6 +386,29 @@ void Receive(uint64_t now) {
 }
 
 void Send(uint64_t now) {
+    mod::race::Start start;
+    if (g_cfg.role == Role::Host && mod::race::TakeStart(start)) {
+        RacePacket rp{};
+        rp.start = start;
+        Queue(&rp, sizeof rp);
+    }
+    uint32_t won;
+    if (mod::race::TakeWon(won)) {
+        WonPacket wp{};
+        wp.serial = won;
+        Queue(&wp, sizeof wp);
+    }
+    for (auto& r : g_repeats) {
+        if (!r.left || now < r.next) continue;
+        r.left--, r.next = now + 500;
+        auto* h = reinterpret_cast<Header*>(r.raw);
+        for (int i = 0; i < kMaxPlayers; i++) {
+            if (i == g_local_player || !g_players[i].have) continue;
+            Type type = Type(h->type);
+            *h = Make(type, i, now);
+            SendTo(i, r.raw, r.bytes);
+        }
+    }
     if (g_cfg.role == Role::Host) {
         for (int i = 1; i < kMaxPlayers; i++)
             if (g_players[i].have && now - g_players[i].last_rx > kTimeoutMs) {

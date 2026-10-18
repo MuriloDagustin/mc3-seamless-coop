@@ -30,6 +30,7 @@
 #include "mod.h"
 #include "overlay.h"
 #include "car.h"
+#include "race.h"
 #include "net/session.h"
 
 namespace mod::scan {
@@ -140,6 +141,7 @@ std::string Run(const std::string& text) {
     }
     if (c == "state") return game::State();
     if (c == "players") return coop::Players();
+    if (c == "gorace") return race::GoToOpenRace(a.size() > 1 ? std::atoi(a[1].c_str()) : -1);
     if (c == "nick" && a.size() > 1) {
         coop::RequestNickname(text.substr(text.find(a[1])));
         return "ok";

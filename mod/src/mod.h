@@ -44,6 +44,7 @@ bool Override(DWORD user, XINPUT_STATE* state);  // the pad the channel gives, c
 namespace game {
 void Start();                                   // the guest image is found: the game side's thread
 void Pad(DWORD user, const XINPUT_STATE* state);  // a controller read by the game (null: not connected)
+void FiberTick();                               // on the game thread, from the xinput hook
 std::string State();                            // key=value for the test channel
 }  // namespace game
 

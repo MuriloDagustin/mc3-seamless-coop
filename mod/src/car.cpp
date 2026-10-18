@@ -3,7 +3,8 @@
 // A partner is a second human of the host's own career race/cruise, without the game's network mode (that mode
 // stops the AI, the traffic, the finish, the money, the career credit and the autosave): both race setups (current
 // [0x53F2E0] and next [0x53F2E4]) say 2 humans, and slot 1 holds the partner's own campaign car (its CarCfg) with no
-// pad (+0x10 = -1, +0x14 = -1, +0x18 = -1), so the game builds a full player car from it when the world loads and
+// pad (+0x10 = -1, +0x18 = -1) but its HUD number (+0x14 = the slot: the finish handler 0x1E06E0 reads that player's
+// HUD with no null check, docs/RE-CORRIDA.txt), so the game builds a full player car from it when the world loads and
 // never looks for a controller. That car has no input object; the mod drives it from the partner's packets.
 #include "car.h"
 
@@ -83,7 +84,7 @@ void WriteSlot(uint32_t setup, int slot, const Remote& r) {
     if (Ptr(cfg) && r.have_cfg)  // the CarCfg object the setup owns: keep its vtable, take the partner's fields
         std::memcpy(HostPtr(cfg + 4), r.cfg.data() + 4, kCarCfgBytes - 4);
     W32(s + kSlotPad, 0xFFFFFFFF);
-    W32(s + kSlotHud, 0xFFFFFFFF);
+    W32(s + kSlotHud, uint32_t(slot));
     W32(s + kSlotPlayer, 0xFFFFFFFF);
     G<uint8_t>(s + kSlotOut) = 0;
 }

@@ -175,6 +175,7 @@ static DWORD VirtualState(DWORD user, XINPUT_STATE* state) {
 
 extern "C" DWORD WINAPI ProxyXInputGetState(DWORD user, XINPUT_STATE* state) {
     g_xinput_calls++;
+    if (user == 0) mod::game::FiberTick();
     if (mod::control::Enabled()) return VirtualState(user, state);
     auto f = REAL(DWORD(WINAPI*)(DWORD, XINPUT_STATE*), "XInputGetState");
     DWORD r = f ? f(user, state) : ERROR_DEVICE_NOT_CONNECTED;
@@ -184,6 +185,7 @@ extern "C" DWORD WINAPI ProxyXInputGetState(DWORD user, XINPUT_STATE* state) {
 
 extern "C" DWORD WINAPI ProxyXInputGetStateEx(DWORD user, XINPUT_STATE* state) {  // ordinal 100: with the guide button
     g_xinput_calls++;
+    if (user == 0) mod::game::FiberTick();
     if (mod::control::Enabled()) return VirtualState(user, state);
     auto f = REAL(DWORD(WINAPI*)(DWORD, XINPUT_STATE*), MAKEINTRESOURCEA(100));
     DWORD r = f ? f(user, state) : ERROR_DEVICE_NOT_CONNECTED;
