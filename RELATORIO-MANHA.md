@@ -1,6 +1,6 @@
 # Relatório — co-op da campanha do MC3
 
-**Resumo:** o carro de campanha do parceiro já entra no seu mundo como mais um corredor e anda pela rede. Ainda falta o que torna isso jogável para vocês dois: menu F10, EOS, início de corrida sincronizado, crédito para os dois e o zip.
+**Resumo (atualizado 18/10 ~12h40):** o carro de campanha do parceiro entra no seu mundo; menu F10, sala EOS, largada comum e vitória para os dois funcionam nos testes com 2 cópias; há um zip de teste. Falta: tráfego sincronizado (em andamento, ainda não funciona), corrigir a tela dividida que apareceu, IA sincronizada, e o teste real entre dois PCs.
 
 ## Rota atual: mod dentro do seu xrevive
 - Um `xinput1_4.dll` (o mod) fica ao lado de uma **cópia** do runner do xrevive. Sua instalação e o seu exe não são tocados.
