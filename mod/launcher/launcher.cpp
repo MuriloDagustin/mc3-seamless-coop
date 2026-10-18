@@ -68,7 +68,10 @@ fs::path Runner(const fs::path& game) {
     while (!ec && it != end) {
         const auto& e = *it;
         auto name = e.path().filename().wstring();
-        if (name.rfind(L".xrevive-", 0) == 0 && e.path().extension() == L".exe" && e.is_regular_file(ec)) {
+        // the runner xrevive puts beside the game: .xrevive-<sha>.exe in older releases, "<game name>.exe" since
+        // its October 2026 update; a top level .exe of 20 MB or more either way
+        bool exe = e.path().extension() == L".exe" && e.is_regular_file(ec) && e.file_size(ec) >= 20u * 1024 * 1024;
+        if (exe) {
             auto t = e.last_write_time(ec);
             if (!ec && (best.empty() || t > newest)) best = e.path(), newest = t;
         }

@@ -40,9 +40,11 @@ class Process(C.Structure):
 
 
 def runner_exe():
-    exes = sorted(GAME.glob(".xrevive-*.exe"), key=lambda p: p.stat().st_mtime)
+    # the runner beside the game (read only, copied): .xrevive-<sha>.exe before xrevive's October 2026 update,
+    # "<game name>.exe" since; a top level .exe of 20 MB or more
+    exes = sorted((p for p in GAME.glob("*.exe") if p.stat().st_size >= 20 << 20), key=lambda p: p.stat().st_mtime)
     if not exes:
-        raise SystemExit(f"no .xrevive-*.exe in {GAME}")
+        raise SystemExit(f"no xrevive runner in {GAME}")
     return exes[-1]
 
 

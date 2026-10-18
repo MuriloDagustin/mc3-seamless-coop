@@ -51,6 +51,11 @@ int g_phase = 0;  // 0 idle, 1 car outside the marker (it arms), 2 in it with th
 float g_target[3] = {};
 uint32_t g_record_id = 0;
 uint8_t g_saved_hookman = 0xFF, g_saved_side = 0xFF;
+// the partner's own record of the host's race, its opponents and difficulty (+0x0B..+0x4B) taken from the host's
+// record for this start (the career race build 0x277AE0 reads them at the load) and given back once it has loaded
+uint8_t g_saved_fields[0x4C]{};
+bool g_fields_lent = false;
+uint16_t g_fields_id = 0;
 uint64_t g_phase_at = 0;
 // both
 uint64_t g_lights_until = 0;  // the test's challenge: the lights kept on until then
@@ -180,6 +185,14 @@ uint32_t EnsureRecord(uint32_t data, const Start& s) {
 void PartnerTick(uint64_t now) {
     uint32_t career = P(kCareer), data = P(career + 0x0C);
     if (!data) return;
+    if (g_fields_lent && !Cruise() && RaceState() >= 2 && RaceState() <= 6) {  // the race has loaded: as it was
+        if (uint32_t rec = FindRecord(data, g_fields_id, 0, 0)) {
+            uint8_t hook = G<uint8_t>(rec + 0x09), side = G<uint8_t>(rec + 0x0A);
+            std::memcpy(HostPtr(rec + 0x0B), g_saved_fields + 0x0B, kRecord - 0x0B);
+            G<uint8_t>(rec + 0x09) = hook, G<uint8_t>(rec + 0x0A) = side;
+        }
+        g_fields_lent = false;
+    }
     if (g_phase == 1 && now - g_phase_at > 300) {  // armed outside: into the marker
         car::Pose at;
         if (car::Local(at)) {
@@ -217,6 +230,15 @@ void PartnerTick(uint64_t now) {
         return;
     }
     g_record_id = G<uint16_t>(rec + 0x04);
+    if (std::memcmp(HostPtr(rec + 0x0B), s.record + 0x0B, kRecord - 0x0B)) {  // same race, the host's opponents
+        std::memcpy(g_saved_fields, HostPtr(rec), kRecord);
+        uint16_t task = G<uint16_t>(rec + 0x1E);
+        std::memcpy(HostPtr(rec + 0x0B), s.record + 0x0B, kRecord - 0x0B);
+        G<uint16_t>(rec + 0x1E) = task;                                 // this career's own task
+        G<uint8_t>(rec + 0x24) = G<uint8_t>(rec + 0x24) & ~uint8_t(0x10);  // not 'new'
+        g_fields_lent = true, g_fields_id = uint16_t(g_record_id);
+        Log("race: this career's record of the race takes the host's opponents for this start");
+    }
     g_saved_hookman = G<uint8_t>(rec + 0x09), g_saved_side = G<uint8_t>(rec + 0x0A);
     G<uint8_t>(rec + 0x09) = 0xFF, G<uint8_t>(rec + 0x0A) = 0xFF;  // the marker filter: any car class, no roaming hookman
     G<uint8_t>(cruise + 0x1250) = 1;                               // armed
