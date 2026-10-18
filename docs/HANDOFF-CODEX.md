@@ -49,7 +49,8 @@ python tools\ctl.py <porta> state|shot <nome>|players|peek <addr> [n]
 - **Critério de pronto:** `ai_test.py` com `ai=experimental applied=N`, a distância por adversário abaixo de ~5 m, e o host vendo a mesma posição de chegada que o parceiro.
 - **Referências:** `docs/RE-IA.md` e `docs/RE-IA-IMPLEMENTACAO.md`. O bloqueio do cérebro da IA é o bit `car+0x15C` 0x10, já em `ai.cpp`.
 
-### 2. Pacote para o amigo
+### 2. Pacote para o amigo (gerado; smoke completo bloqueado pelo xrevive aberto)
+- **Atualização Codex:** build/package, unitários e --logs do EXE extraído passaram; duplicata foi corretamente recusada. Carga completa/painel aguardam fechamento manual do xrevive pelo usuário. Ver relatório de teste.
 - Testar o zip de verdade com `tools\test_launcher.py`. Ele extrai o zip numa pasta de teste e força `MC3COOP_GAME` para a pasta de teste.
   - **Atenção:** a pasta de teste tem o runner ANTIGO. Copie o runner novo (`D:\Jogos\...\Midnight Club 3 DUB Edition Remix.exe`, só leitura) para `D:\dev\mc3-coop-data\testgame\Midnight Club 3 DUB Edition Remix\`.
   - Confira que o lançador acha o runner novo, que o mod carrega e que o F10 aparece.

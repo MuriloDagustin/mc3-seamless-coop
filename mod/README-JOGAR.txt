@@ -16,6 +16,8 @@ COMO JOGAR
    Na primeira vez ele procura a instalação. Se precisar, selecione a pasta
    "Midnight Club 3 DUB Edition Remix" que contém extracted e SaveData.
    O caminho fica salvo em MC3Coop.ini ao lado do lançador.
+   O executável criado pelo xrevive pode se chamar "Midnight Club 3 DUB Edition Remix.exe"
+   ou, nas versões antigas, ".xrevive-<código>.exe". O lançador prepara a cópia MC3Runner.exe.
 3. Na primeira execução ele oferece criar uma regra de entrada UDP no Firewall do Windows.
    Só se você escolher Sim, o Windows pede administrador para executar o netsh que cria a regra.
    O jogo continua sem elevação. Você pode recusar ou cancelar e continuar jogando.
@@ -59,14 +61,20 @@ COMO ENVIAR OS LOGS
   Se a coleta falhar, confira espaço e permissão na Área de Trabalho ou envie a pasta logs manualmente.
 
 ESTADO DESTA VERSÃO
-- O host iniciar uma corrida leva o parceiro à mesma corrida de carreira.
-- A vitória é comunicada pela rede e há complemento do prêmio até o valor recebido pelo vencedor.
+- Pacote experimental. Os testes abaixo usaram duas cópias na mesma máquina, em corridas comuns.
+- A largada do host levou o parceiro automaticamente à mesma corrida de carreira.
 - A vaga remota não tem HUD nem câmera. Nas corridas convencionais ela é concluída internamente
   para não travar sua chegada; pode aparecer como concluída/desistente na classificação local.
-- Essas últimas correções de tela e prêmio foram compiladas e verificadas com memória simulada.
-  Ainda precisam de teste visual com duas cópias antes de considerar este pacote validado para jogar.
-- Tráfego sincronizado continua experimental: se o parceiro não tiver carros locais já criados,
-  o mod ainda não cria puppets. A IA dos adversários também continua independente em cada cópia.
+- Tela inteira, chegadas sem travar e retorno à ronda passaram nos circuitos testados.
+- Vitória recebida antes da chegada local e prêmio para os dois passaram em um circuito.
+  O complemento de um prêmio de colocação inferior ainda precisa de teste específico.
+- Foram sincronizados 48 carros de tráfego, inclusive após carregar uma corrida e voltar à ronda.
+  Colisões após grandes deslocamentos, carros acidentados e caminhões ainda precisam de validação.
+- A IA passou com cinco adversários: posições acompanharam o host e as cinco colocações finais
+  permaneceram iguais nas duas cópias. Isso ainda exige corridas comuns e adversários compatíveis.
+  As colocações dos jogadores humanos podem divergir entre as cópias.
+- Perda de pacotes e latência de internet ainda não foram validadas; a IA pode voltar temporariamente
+  ao controle local se deixar de receber o estado do host durante a corrida.
 - Corridas de eliminação, pontos, perseguição e outras modalidades precisam de validação específica.
 - Uma vitória que chegar pela rede depois de seu resultado local já ter sido processado ainda precisa
   de tratamento adicional; não há garantia de crédito retroativo nesta versão.

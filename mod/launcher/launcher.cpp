@@ -159,7 +159,8 @@ bool RunnerPath(const fs::path& p) {
     auto leaf = p.filename().wstring();
     CharLowerBuffW(leaf.data(), DWORD(leaf.size()));
     // A decisão usa o caminho obtido do processo, nunca só o nome do snapshot.
-    if (EqualI(leaf, L"xrevive.exe") || EqualI(leaf, L"MC3Runner.exe")) return true;
+    if (EqualI(leaf, L"xrevive.exe") || EqualI(leaf, L"MC3Runner.exe") ||
+        EqualI(leaf, L"Midnight Club 3 DUB Edition Remix.exe")) return true;
     if (leaf.rfind(L".xrevive-", 0) == 0 && EqualI(p.extension().wstring(), L".exe")) return true;
     std::wstring full = p.wstring();
     CharLowerBuffW(full.data(), DWORD(full.size()));
@@ -356,7 +357,7 @@ int Launch(const std::vector<std::wstring>& args) {
     if (!forced.empty()) {
         if (!IsGame(forced)) {
             Fail(L"MC3COOP_GAME não aponta para uma instalação válida do xrevive:\n" + forced +
-                 L"\n\nCorrija essa variável para a pasta que contém extracted\\default.xbe e .xrevive-*.exe, ou remova-a.");
+                 L"\n\nCorrija essa variável para a pasta que contém extracted\\default.xbe e o executável do jogo criado pelo xrevive, ou remova-a.");
             return 1;
         }
         game = forced;
@@ -366,7 +367,7 @@ int Launch(const std::vector<std::wstring>& args) {
     }
     while (!IsGame(game)) {
         game = Ask(); if (game.empty()) return 1;
-        if (!IsGame(game)) Fail(L"Essa pasta não contém extracted\\default.xbe e o runner .xrevive-*.exe.\n"
+        if (!IsGame(game)) Fail(L"Essa pasta não contém extracted\\default.xbe e o executável do jogo criado pelo xrevive.\n"
                                 L"Escolha a pasta principal do jogo instalado pelo xrevive.");
     }
     if (forced.empty() && !IniSet(ini, L"game", game.wstring()))
