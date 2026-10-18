@@ -42,6 +42,9 @@ uint64_t g_phase_at = 0;
 // both
 bool g_partner_won = false, g_out_won = false, g_won_sent = false, g_partner_gone = false, g_forfeited = false;
 uint32_t g_won_serial = 0, g_race_serial = 0;
+// the prize: the winner sends what it was paid (1st place), a copy credited with the partner's win tops its own up
+int32_t g_partner_prize = 0, g_out_prize = 0;
+bool g_prize_sent = false, g_topped = false;
 std::string g_last;
 
 uint32_t Cruise() {
@@ -174,8 +177,24 @@ void RaceTick() {
     uint32_t race = P(P(kRaceHolder) + 4);
     int state = RaceState();
     if (!race || Cruise() || !Mapped(race + kEntry, 3 * kEntrySize)) return;
+    uint32_t rewards = P(P(kCareer) + 0x14), data = P(P(kCareer) + 0x0C);
+    if (state >= 8 && state <= 10 && rewards && data && G<uint8_t>(race + 0x0E)) {  // paid (race+0x0E), not saved yet
+        int32_t paid = int32_t(R32(rewards + 0xBC));
+        if (g_won_sent && !g_prize_sent) {  // this player won: what 1st place pays
+            g_prize_sent = true;
+            g_out_prize = paid;
+            g_out_won = true;
+            Log("race: won %d", paid);
+        }
+        if (g_partner_won && g_partner_prize > paid && !g_topped) {
+            g_topped = true;
+            W32(data + 0xACC, R32(data + 0xACC) + uint32_t(g_partner_prize - paid));
+            G<uint8_t>(P(kCareer) + 0x20) = 1;  // the career is saved by the autosave that follows
+            Log("race: prize topped up by %d to the winner's %d", g_partner_prize - paid, g_partner_prize);
+        }
+    }
     if (state != 5 && state != 6) {
-        if (state < 5) g_won_sent = false, g_forfeited = false;
+        if (state < 5) g_won_sent = false, g_forfeited = false, g_prize_sent = false, g_topped = false, g_partner_prize = 0;
         return;
     }
     if (P(P(kGameState) + 4) == 3) return;  // that state skips the race end: nothing written now
@@ -217,7 +236,7 @@ void Tick(bool hosting, bool connected) {
     }
     if (hosting) HostTick();
     else PartnerTick(now);
-    if (Cruise()) g_partner_won = false, g_partner_gone = false;
+    if (Cruise()) g_partner_won = false, g_partner_gone = false, g_partner_prize = 0;
     RaceTick();
 }
 
@@ -230,10 +249,11 @@ void OnStart(const Start& s) {
     Log("race: the host starts %s", g_start_in.name);
 }
 
-void OnPartnerWon(uint32_t) {
+void OnPartnerWon(uint32_t, int32_t prize) {
     std::lock_guard lock(g_lock);
     if (!g_partner_won) Log("race: the partner says it won");
     g_partner_won = true;
+    if (prize > g_partner_prize) g_partner_prize = prize;
 }
 
 void OnPartnerGone() {
@@ -249,11 +269,12 @@ bool TakeStart(Start& out) {
     return true;
 }
 
-bool TakeWon(uint32_t& serial) {
+bool TakeWon(uint32_t& serial, int32_t& prize) {
     std::lock_guard lock(g_lock);
     if (!g_out_won) return false;
     g_out_won = false;
     serial = g_won_serial;
+    prize = g_out_prize;
     return true;
 }
 

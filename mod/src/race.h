@@ -27,10 +27,10 @@ void Tick(bool hosting, bool connected);
 
 // session thread: what came from the others, what goes to them
 void OnStart(const Start& s);
-void OnPartnerWon(uint32_t serial);
+void OnPartnerWon(uint32_t serial, int32_t prize);  // prize 0: not paid yet
 void OnPartnerGone();
 bool TakeStart(Start& out);       // the host's start to send (once per start)
-bool TakeWon(uint32_t& serial);   // this copy's player won the race now ending
+bool TakeWon(uint32_t& serial, int32_t& prize);  // this copy's player won (again with the prize once paid)
 std::string Describe();           // for the test channel
 std::string GoToOpenRace(int index);  // test: the local car into that open race's start marker (no index: the list)
 

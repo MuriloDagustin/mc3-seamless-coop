@@ -84,9 +84,10 @@ struct RacePacket {  // the host started a career race
     Header h;
     mod::race::Start start;
 };
-struct WonPacket {  // the sender won the race it shared
+struct WonPacket {  // the sender won the race it shared (again with what 1st place paid it)
     Header h;
     uint32_t serial;
+    int32_t prize;
 };
 #pragma pack(pop)
 constexpr int kMaxDatagram = 1170;  // also fits the EOS P2P transport
@@ -374,7 +375,11 @@ void Receive(uint64_t now) {
                 }
                 break;
             case kWon:
-                if (n == int(sizeof(WonPacket))) mod::race::OnPartnerWon(reinterpret_cast<WonPacket&>(in).serial);
+                if (n == int(sizeof(WonPacket))) {
+                    WonPacket wp;
+                    std::memcpy(&wp, &in, sizeof wp);
+                    mod::race::OnPartnerWon(wp.serial, wp.prize);
+                }
                 break;
             case kBye:
                 LOGR("coop: player %d left", source + 1);
@@ -389,13 +394,17 @@ void Send(uint64_t now) {
     mod::race::Start start;
     if (g_cfg.role == Role::Host && mod::race::TakeStart(start)) {
         RacePacket rp{};
+        rp.h.type = kRaceStart;
         rp.start = start;
         Queue(&rp, sizeof rp);
     }
     uint32_t won;
-    if (mod::race::TakeWon(won)) {
+    int32_t prize;
+    if (mod::race::TakeWon(won, prize)) {
         WonPacket wp{};
+        wp.h.type = kWon;
         wp.serial = won;
+        wp.prize = prize;
         Queue(&wp, sizeof wp);
     }
     for (auto& r : g_repeats) {
