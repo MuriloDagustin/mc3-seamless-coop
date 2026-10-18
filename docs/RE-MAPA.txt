@@ -1,0 +1,317 @@
+==================== player-car
+SUMMARY: I traced the local player's car from the main loop down to the physics body; the full pointer chain is below. To get the car for player i: idx = GetLocalPlayerIndex() (0x2694D0, returns 0 when not in a network game), then player = *(0x558814 + 8 + 4*idx), vehicle = player+0x14, car = vehicle+0x08.
+
+What hangs off the vehicle and the car:
+- vehicle+0x04 is the input object (mcPlayerInput, vtable 0x47684C).
+- vehicle+0x1C is the phInst. Its world matrix is a packed 4x3 at +0x10, and the position is at +0x34.
+- car+0x68 is the collider, and collider+0x10 is the rigid body (vtable 0x4A33F8). On the body, linear velocity is at +0x44, angular velocity at +0x50, and its own copy of the 4x3 matrix at +0x5C (position at +0x80).
+- Speed is stored on the car at +0xB0 (length of the body's velocity).
+- The control fields on the car are steer +0x6C, throttle +0x70, brake/reverse +0x74, handbrake +0x78, flags +0x7C. The input update writes them every frame.
+
+Teleport / reset: write the spawn position to car+0x80 (0x3305F0), the rotation angles to car+0x8C (0x330610; the game uses (0, heading, 0)), and the starting velocity and spin to car+0x98 and car+0xA4. Then call the car's virtual Reset (vtable slot +4, which is 0x124520 and then 0xA2460). The game also has a snap-to-ground helper (0x122770), and the player-level wrappers are 0x2C8860 (set start position), 0x2C8690 (reset to start) and 0x2C19B0 (mcPlayer::Reset, used for the cruise reset).
+
+Per frame: main() at 0x12440 calls the main loop 0x1F9D0, which switches on the game state stored at [0x557ED0]+4. The game update 0x1EDB0 then calls:
+- the physics simulator 0x29D210 on [0x558120], which runs N substeps (frame time is the float at 0x4B2D48);
+- the player manager update 0x2BDEC0 on [0x558814];
+- the player manager in turn calls the vehicle manager [0x5638E4], whose update 0xFEF80 copies each car's matrix to its model.
+Car update is 0xFFD90 and input update is 0x2C9AA0.
+
+The game already has system-link netcode for this input. In a network game (config+0x108 set) the controls are packed into 8 bytes (input+0x6C to +0x77). Remote cars are then driven from that packet by 0x2C9570.
+- [CONFIRMED] Player manager singleton and player array (GetPlayer)
+    @ global 0x558814 (mcPlayerManager*, 0x74 bytes, vtable 0x47615C); player[i] at mgr+0x08+4*i; GetPlayer = 0x2BD910
+- [CONFIRMED] Local player index helper and network flag
+    @ 0x2694D0 GetLocalPlayerIndex; config singleton [0x53F2E0]: +0x108 byte isNetworkGame (0x2694A0), +0x3D8 local net slot (0x2694B0), +0x4C player count (0x2693C0), per-player slot = cfg+0x114+0x2C*i (0x2693D0), slot+0x18 = controller port (-1 = none)
+- [CONFIRMED] mcPlayer -> vehicle pointer (player+0x14); mcPlayer ctor/vtable
+    @ mcPlayer ctor 0x2BFE50 (0x2EC bytes, vtable 0x476498); player+0x14 = vehicle; player+0x54 = camera/view object (+0x58 = viewed player index)
+- [CONFIRMED] Vehicle object layout (built by mcPlayerFactory)
+    @ vehicle: ctor 0xFF160, 0x6C bytes, vtable 0x454F40 ([0]=dtor 0x100D70, [+4]=Reset 0xFFC50, [+8]=Update 0xFFD90, [+0xC]=0xFFA70). +0x04 input, +0x08 car (vehCar), +0x0C model/drawable (0xF6510, 0x49C bytes), +0x10 audio (0x10AC20), +0x14 (0x102210), +0x1C phInst (vtable 0x46C750, back pointer inst+0x40=vehicle), +0x4C car data, +0x50 vehCarSim tuning (0xE0 bytes, vtable 0x456550), +0x5D player index byte
+- [CONFIRMED] Car world transform: phInst Matrix34 (packed 4x3) at inst+0x10, position at inst+0x34; inst = [vehicle+0x1C] = [[car+0x04]+0x1C]
+    @ inst+0x10..0x3F: row0 +0x10, row1 (up) +0x1C, row2 +0x28, pos +0x34/+0x38/+0x3C; inst+0x08 = phLevel index (word)
+- [CONFIRMED] Rigid body: linear velocity, angular velocity, mass, physics matrix; car -> collider -> body
+    @ collider = [car+0x68] (vtable 0x4754D4; +0x04 phInst, +0x10 body, +0x14 matrix ptr); body = [collider+0x10] (vtable 0x4A33F8): +0x04 mass, +0x0C inertia, +0x2C momentum, +0x44 linear velocity, +0x50 angular velocity, +0x5C Matrix34 (pos at +0x80)
+- [CONFIRMED] Car speed (scalar)
+    @ car+0xB0 = |[[car+0x68]+0x10]+0x44|
+- [CONFIRMED] Per-frame control inputs on the car (steer/throttle/brake/handbrake)
+    @ car+0x6C steer [-1,1], car+0x70 throttle [0,1], car+0x74 brake/reverse [0,1], car+0x78 handbrake, car+0x7C input flags; car+0x14 transmission (gear word at +0x14, 0xADAC0 up / 0xADAF0 down)
+- [CONFIRMED] Player input object and its per-frame update
+    @ mcPlayerInput ctor 0x2C9970 (0x84 bytes, vtable 0x47684C, base 0x35F230 vtable 0x4A4B18). Update 0x2C9AA0 (vtable +0x1C), reached from base Update 0x360200 (vtable +0x08). Fields: +0x0C throttle, +0x10 brake, +0x14 handbrake, +0x18 steer, +0x28 button bits, +0x2C gear, +0x34 car, +0x50 vehicle, +0x60 player slot, +0x64 pad mapper (0x2CA770; analog read 0x2CA890(n))
+- [CONFIRMED] Built-in network input replication (system-link): compressed per-frame control packet
+    @ 0x2C9570 (called at the end of 0x2C9AA0); packet = input+0x6C (flags dword) + bytes +0x70 throttle*255, +0x71 brake*255, +0x72 handbrake*255, +0x73 steer*127, +0x74 gear, +0x75/+0x76, +0x77 flags; +0x78 = packet-valid
+- [CONFIRMED] Teleport / reset-to-pose mechanism on the car
+    @ car+0x80 reset position (setter 0x3305F0), car+0x8C reset rotation angles in radians (setter 0x330610; game uses (0,heading,0)), car+0x98 reset linear velocity, car+0xA4 reset angular velocity; apply with car vtable+4 Reset = 0x124520 -> 0xA2460
+- [CONFIRMED] Place-on-ground helper and racer start-position API
+    @ 0x122770 snaps car+0x80/+0x8C to the ground (raycast via phLevel vtable+0x58, then 0x3305F0/0x330610). Racer (base of mcPlayer): +0x14 vehicle, +0x18 start pos vec3, +0x24 heading. 0x2C8860 SetStartPosition(vec4* posHeading, bool liftByCarHeight); 0x2C8610 applies it; 0x2C8690 ResetToStart (also in vtable 0x476754); 0x2C19B0 = mcPlayer::Reset (vtable 0x476498+0x1C)
+- [CONFIRMED] Main loop and per-frame world step (call chain to physics and vehicles)
+    @ main 0x12440 -> 0x1F9D0 (main loop, switches on state [[0x557ED0]+4] via jump table 0x1FEDC) -> 0x1EDB0 (game update) -> phSimulator::Update 0x29D210 on [0x558120] (at 0x1EEC9) and PlayerManager::Update 0x2BDEC0 on [0x558814] (at 0x1EE94/0x1EEF7) -> VehicleManager [0x5638E4] vtable+0x10 = 0xFEF80 (base 0x35DA80 runs vtable+0x08/+0x0C on registered objects) -> vehicle Update 0xFFD90; present = 0x2D5460 -> 0x2D2990 -> D3DDevice_Swap 0x4187A0
+- [CONFIRMED] Collider per-step update copies physics pose into the phInst (body -> inst sync)
+    @ collider vtable 0x4754D4 slot +0x08 = 0x2A38A0
+    VERIFY: holds — Vtable dump: 0x4754D4+8 = 0x2A38A0. 0x2A38A8 call [eax+0x24] on [esi+0x10]; 0x2A38AD call 0x2A37B0, which compares [esi+0x14] with body+0x5C and applies the centroid offset from [esi+0x0C]+0x2C..0x34; 0x2A38B7 call [edx+0x50] on the inst; 0x2A38C0-0x2A390A copies 12 dwords from [esi+0x14] to [esi+0x
+- [GUESS] Car customization object passed into the vehicle build (link to partner's own car)
+    @ factory+0x50 = car config object (0xF4430, 0x3138 bytes), factory+0x54 = custom data applied by 0xF32A0; factory+0x4C = car data (0x105B80)
+OPEN: ["Which vtable slot of the phSimulator at [0x558120] (+0x08/+0x0C/+0x10 in the 0x29D210 loop) iterates the active colliders and calls collider vtable+0x08 (0x2A38A0)? The simulator's vtable/ctor was not resolved.", "Does the system-link mode only send inputs (lockstep, packet at input+0x6C..+0x77), or does it also periodically send full transforms? A state sync would let a joining partner's car be placed via car+0x80/+0x8C + Reset.", 'Exact semantics of rows 0 and 2 of the inst Matrix34 (right vs forward, sign) and the order of the rotation angles in 0x87310; only row 1 = up (inst+0x20 = up.y) is confirmed.', 'Is writing the inst matrix (inst+0x10) or the body matrix (body+0x5C) directly enough to teleport? Body->inst sync happens every step (0x2A38A0), so writing the body (and zeroing body+0x44/+0x50) is probably required; the confirmed safe path is car+0x80/+0x8C plus vtable+4 Reset.', 'Which list in the vehicle manager base (0x35DA80: +0x64/+0x68, +0x0C/+0x10, +0x14/+0x18, ...) holds the input objects and which holds vehicles; slot +0x0C of the vehicle (0xFFA70) takes 2 args, so it is probably called from elsewhere.', "Opponent/AI vehicles use a different factory (0x2CB270 ctor is shared through mcPlayerFactory only for players and the showroom). For co-op, a second human car could be spawned by creating another mcPlayer via 0x2BFE50 with a network slot whose config (cfg+0x114+0x2C*i) points to the partner's car config."]
+==================== car-config
+SUMMARY: The game describes a customized car with one 0x108-byte class that names itself "CarCfg" (vtable 0x4483DC, ctor 0x271D20, copy 0x271E20 with thunk 0x272010). Its reflection/registration function 0x270E80 names every field. CarCfg+0xE3 holds the model name (TypeName, char[0x16]). The rest of the struct holds parts indices (rims, bumpers, body, spoiler, hood...), paint (type, preset, 5 colour XYA + colour-shift), vinyl, logos/decals, chrome/neon/tint colours, performance levels (EngineState0-6, Trans, Suspension, Brake, Tire, Hydraulics) and tuning (camber, ride height, tire width/offset/profile, rim size).
+
+The live career profile is a static object at 0x53F308. It has 30 owned-car CarCfg slots at 0x53F810 (+0x508, stride 0x108), the owned-car count byte at 0x53F80C (+0x504) and the currently selected garage slot byte at 0x53F80D (+0x505). Per-model stock CarCfgs start at 0x541700 (+0x23F8); there are 127 in the Remix layout. The save copy lives at mcMemCard(0x4CB690)+0x14.
+
+Races are built from a "race setup" object (0x3E0 bytes, ctor 0x26B9E0). There are three globals of this type: 0x53F2E0 (active), 0x53F2E4 (lobby/network) and 0x53F2E8. Each has 8 player entries at +0x114 with stride 0x2C, and entry+0x0C points to that player's CarCfg (absolute: [setup + slot*0x2C + 0x120]). 0x268FF0 copies 0x53F2E4 into 0x53F2E0. The player manager 0x2BE100 then constructs each player (0x2BFE50). That ctor fills an mcPlayerFactory descriptor (0x2CB270, vtable 0x476940; base ctor stores CarCfg* at +0x54) and calls 0x2CBC40. 0x2CBC40 allocates an mcCarCustom (0x3138 bytes, ctor 0xF4430) and applies the CarCfg with 0xF32A0.
+
+The game's own netcode already sends the whole CarCfg, raw. There are two messages:
+(1) The join/player-info message: base type 0x04, 0x198 bytes, CarCfg at +0x88. The client builds it in 0x2EFF0 from setup slot 0. The lobby picks that car through 0x155920, which by default takes the CAREER garage's current car. The host's join handler 0x2EC80 stores it in [[0x53F2E4] + assignedSlot*0x2C + 0x120].
+(2) The car-config update message: type 0x44, 0x114 bytes, CarCfg at +0x08, slot at +0x110, flag at +0x111. It is sent by 0x25D20 (session vtable 0x449100, slot +0x13C) and received by 0x26370 (+0x1A0, through dispatcher 0x1AF470). The host relays it to everyone else and each peer copies it into the same per-slot CarCfg.
+
+So the partner's own campaign car (model, parts, paint, vinyls, upgrades, tuning) can travel through the existing path unchanged. A co-op mod has to make sure the partner side picks from the career garage (0x53F2FC == 0). It also has to put the received CarCfg into an active slot of the host's race setup before 0x2BE100 or 0x2BFE50 runs.
+- [CONFIRMED] CarCfg = complete description of a customized car (class name string "CarCfg"), size 0x108
+    @ vtable 0x4483DC; ctor 0x271D20; dtor 0x19040; copy (operator=) 0x271E20 (thunk 0x272010); field registration 0x270E80
+- [CONFIRMED] CarCfg field layout (from the registration function 0x270E80; type 3=u8, 1=bool, 4=s16, 6=float)
+    @ CarCfg+0x00..+0x105
+- [CONFIRMED] Model identity: CarCfg+0xE3 TypeName is resolved against the global vehicle table
+    @ vehicle table ptr [0x557EB0], entry stride 0x28 (name ptr at +0); count word [0x557EB4]; name->index 0x26A6A0; CarCfg::GetVehicleEntry 0x272FA0; CarCfg::SetTypeFromIndex 0x272F70
+- [CONFIRMED] Per-model stock CarCfg loaded from tune file tune/vehicle/customdata/<model> (extension from vfunc = "CarCfg")
+    @ CarCfg::LoadDefault 0x2733B0 -> 0x273040 (parser 0x32F7D0/0x32F9A0/0x32F840)
+- [CONFIRMED] Live career profile (static object): owned cars = 30 CarCfg garage slots; owned count; currently selected car
+    @ profile object 0x53F308 (class ctor 0x26CE90 / init 0x26D290, static init 0x378A80). Garage CarCfg[30] at 0x53F810 (=+0x508, stride 0x108). Owned-count byte 0x53F80C (+0x504). Current garage slot byte 0x53F80D (+0x505). Per-model stock CarCfg[127] at 0x541700 (+0x23F8). Per-model unlock objects (0x1BC each, vtable 0x4483D4) at +0xA6F0. Dirty/needs-save byte +0x18340.
+- [CONFIRMED] Save-game copy of the profile inside mcMemCard
+    @ mcMemCard global [0x4CB690] (size 0x33560, vtable 0x44840C, ctor 0x1A8D0); Remix profile at mcMemCard+0x14; old-format (102-model) profile at +0x1E504
+- [CONFIRMED] Selecting the player's car (career garage car vs stock model) into a race-setup slot
+    @ 0x155920 (args: slot, ?, ?, destCarCfg*). Flag byte 0x53F2FC: 0 = career garage, 1 = stock model. s16 0x53F2FE = garage slot / model index.
+- [CONFIRMED] Race setup object holds per-player CarCfg pointers (8 slots)
+    @ globals [0x53F2E0] (active race), [0x53F2E4] (lobby/network/pending), [0x53F2E8]; class size 0x3E0, ctor 0x26B9E0, reset 0x26B510, copy 0x26B2E0. Player entry i at +0x114+i*0x2C (ctor 0x2766C0, copy 0x276570); entry+0x0C = CarCfg* => [setup + i*0x2C + 0x120].
+- [CONFIRMED] Spawning a racer's drivable car from its slot CarCfg (player manager -> player ctor -> mcPlayerFactory)
+    @ player manager ctor 0x2BE100 (vtable 0x47615C) -> player ctor 0x2BFE50 (size 0x2EC, vtable 0x476498) -> mcPlayerFactory init 0x2CB270 (vtable 0x476940, base ctor 0x361B30) -> mcPlayerFactory build 0x2CBC40 (in-race) / 0x2CBAE0 (frontend/garage).
+- [CONFIRMED] mcPlayerFactory::Build creates the visual customization (mcCarCustom) and applies the CarCfg
+    @ 0x2CBC40; mcCarCustom ctor 0xF4430 (object size 0x3138); mcCarCustom::ApplyCarCfg 0xF32A0 (CarCfg*, bool forceAll, int slot); model instance via [0x50A08C] -> 0x105B80 (frontend path 0x2CBAE0)
+- [CONFIRMED] Network session object (System Link/online) and its message dispatcher
+    @ session global [0x557EFC] (ctor 0x24300, size 0xC4, vtable 0x449100); dispatcher 0x1AF470 switches on msg[0]-0x40 via jump table 0x1AF6F4; Send = vtable+0x24 (msg, destMask, flags); [sess+0x10] = local slot, [sess+0x18] = host slot (GUESS on semantics)
+- [CONFIRMED] Net message 0x44 = CarCfg update (serialize = raw struct copy). Send function.
+    @ SendCarCfg 0x25D20 = vtable 0x449100 slot +0x13C (0x44923C). Args: (CarCfg* src, slot (-1 = local [sess+0x10]), bool, byte flag, destMask (0xCAFEBABE = 1<<hostSlot)). Packet: [0]=0x44, [2]=u16 size 0x114, +0x08 CarCfg (0x108 bytes), +0x110 slot byte, +0x111 flag byte. Message ctor 0x24220.
+- [CONFIRMED] Net message 0x44 receive (deserialize + store the remote player's CarCfg); the host relays it
+    @ OnCarCfg 0x26370 = vtable 0x449100 slot +0x1A0 (0x4492A0). Stores into [[0x53F2E4] + msg.slot*0x2C + 0x120].
+- [CONFIRMED] Join/player-info message carries the joining player's CarCfg (base type 0x04, total 0x198 bytes, CarCfg at +0x88)
+    @ message factory 0x1AF950 (ptr at 0x4490AC); base ctor 0x5C1D0 (type 0x04, name at +0x11, +0x84 flag); client fill 0x2EFF0 (ptr at 0x44A514); host handler 0x2EC80 (ptr at 0x44A4FC); +0x190 flags (from 0x2E970), +0x194 mask ([0x522BB8])
+- [CONFIRMED] Single-player / career start puts the profile's current garage car into setup slot 0 (and slot 1 for 2-player split-screen)
+    @ 0x268D80 (callers 0x12440, 0x126C8, 0x33D6C0)
+    VERIFY: holds — The slot 0 part is correct. 0x268DE3..0x268E02: movzx edx,byte [0x53F80D]; imul 0x108; add 0x53F810; mov ecx,[[0x53F2E4]+0x120]; call 0x272010. CORRECTION: the slot-1 copy is unreachable in this function. 0x268DCB/0x268DE0 set [[0x53F2E4]+0x50]=ebx=1 right before 'cmp [eax+0x50],ebx(1); jle skip', s | CORRECTED: Only slot 0 is written ([setup+0x50] is forced to 1 just before, so the [setup+0x14C] copy is dead code here).
+- [GUESS] Hook points for co-op: inject the partner's own campaign CarCfg into a host race-setup slot before players are created
+    @ write CarCfg to [[0x53F2E4] + n*0x2C + 0x120] before 0x268FF0 runs (or to [[0x53F2E0] + n*0x2C + 0x120] before 0x2BE100); the receive path 0x26370 / 0x2EC80 already does exactly this
+OPEN: ['How does 0x2BE100 decide which of the 8 slots get a player? It reads an active-byte array filled by 0x2BD810/0x2BDC00, which was not traced. This matters for adding the partner as an extra human slot in a career race.', 'What exactly do race-setup entry fields +0x00, +0x10 (passed to the player ctor as arg3), +0x18 (!= -1, maybe AI/opponent id), +0x26 (0x13A byte) and the second 8-entry array at +0x274 mean?', 'Is the CarCfg alone enough to rebuild the physics car (engine, transmission and other levels from EngineState/TransState...)? The physics side of 0x2CBC40 (vtable calls +0x20, +0x04, +0x10 and 0x361B80) was not followed. The visual side is confirmed through 0xF32A0.', 'What are the 0x1BC-byte per-model unlock objects at profile+0xA6F0 (ctor 0x273100, bit set/test 0x273300/0x273360)? They are probably parts unlocks and are not needed to display a car.', 'How is the save copy (mcMemCard+0x14) synced with the live profile 0x53F308 on load and save?', 'What do join-message fields +0x08 (from 0x1AFBA0), +0x190 (0x2E970 flags) and +0x194 ([0x522BB8] mask) contain, and what do msg 0x44 +0x111 and the 0x15B590 rejection condition mean?', "What does flag [0x50F130] mean? It forces 'stock model' car selection (0x53F2FC=1) in the garage menu 0x152420, probably arcade or network quick race. Co-op must make sure it is 0 on the partner side so the career garage car is sent."]
+==================== race-career
+SUMMARY: I mapped the career race flow statically, from opening a race in cruise through the race state machine and checkpoints to applying the result to the career.
+
+Key objects:
+- Global 0x557F0C is the mcPgCareer object (ctor 0x278160, vtable 0x473B98). Its fields: +0x0C careerData (0xCC8 bytes), +0x10 unlock/progression manager, +0x14 rewards.
+- 0x557EEC is the mcRaceStateDerived state machine (vtable 0x4691B8).
+- [0x533E24]+4 is the current race object (mcRaceBase family; base vtable 0x46A010).
+- 0x53F2E4 and 0x53F2E0 are the 0x3E0-byte next and current game-setup structs.
+- 0x557EE4 is the static per-city race database.
+
+Starting a race: in cruise, the hookman logic (0x1D8F20) finds the player inside an open race's start marker and calls mcPgCareer::StartRace(u16 UniqueId) at 0x277990. SetupNextCareerRace (0x278270), state 4, then calls the race-setup function 0x277AE0(UniqueId). That function looks up the open-race record, sets careerData+0x58 = current race id, and fills the next setup via 0x26B8E0(City, RaceIdx). Progress (0x2779D0) then commits the state and switches the game state machine (8, then 6) so the race loads.
+
+Race states (EnterState 0x1C3B70, jump table 0x1C3C28):
+- 2: intro
+- 4: countdown
+- 5: GO
+- 7: finished
+- 12: race over
+
+On entering state 7 (0x1C2B00) the game does three things in order:
+1. Awards money once, based on finishing position (0x1CFC50).
+2. Computes result = localRacer.won ? 0 : 1.
+3. Calls 0x1D1810(result), which in career mode calls mcPgCareer::ReportRaceResult(result) at 0x277EE0.
+
+Result codes: 0 won, 1 lost, 2 changed vehicle, 3 restart, 4 quit to cruise, 5 quit to front end, 6 end of race to garage.
+
+On a win, with career state 4 and no tournament flag, ReportRaceResult calls 0x277530. That function:
+- erases the race from the open-race list and adds it to history;
+- increments NumberOfWonRaces;
+- advances the hookman counter (which can mark the hookman as beaten);
+- applies the side-quest or filler reward.
+It then runs the unlock evaluation 0x2893C0.
+
+The race UniqueId is a per-save counter (careerData+0xB18 "UniqueRaceIdCounter"), so it is NOT stable between two copies. A stable cross-copy key is (City, RaceIdx), i.e. record bytes +0x08 and +0x06. The setup race-name string (setup+0x68) also works, and the existing online code already uses it to tell "next race" from "restart".
+
+To force or credit a win:
+- Set the local racer-info +0x5D (won) to 1 before race state 7 is entered (or push 0 at 0x1C2B52), or
+- Call ReportRaceResult(0) while career state is 4 and careerData+0x58 holds the race's local UniqueId.
+
+The race must exist in the local open list: 0x277530 does not check for index -1.
+- [CONFIRMED] mcPgCareer::ReportRaceResult(int result), thiscall, ecx = mcPgCareer (global 0x557F0C)
+    @ 0x00277EE0
+    VERIFY: holds — Re-read the asm. 277EE0..277EEE checks [0x53F2D4]==2. 277EF8 ebx=[esi+0x24]. 277F03 [esi+0x28]=result. 5 sets +0x2C=1 and 6 sets +0x2C=7. With state 4: results 1/2/3 set +0x2C=4 and call 0x276F50(word [data+0x58]) at 277F92..277FA5; result 0 (or result==state) sets +0x2C=3 and 0x276F20(city), with +
+- [CONFIRMED] Race result codes passed to ReportRaceResult
+    @ 0x00277EE0 (callers 0x1C2B55 via 0x1D1810, 0x16A8D7, 0x16A369, 0x162267, 0x18B8CF, 0x18C5DA)
+- [CONFIRMED] Win-credit core: applies a won career race (erase from open list, counters, hookman/side-quest rewards)
+    @ 0x00277530 (thiscall mcPgCareer, no args)
+- [CONFIRMED] Career unlock evaluation after a win (mcPgUnlockingRulesEval-driven)
+    @ 0x002893C0 (thiscall [mcPgCareer+0x10])
+- [CONFIRMED] mcPgCareer object layout
+    @ global 0x557F0C; ctor 0x00278160; vtable 0x473B98
+- [CONFIRMED] careerData (0xCC8 bytes, [mcPgCareer+0x0C]) fields named by its serializer
+    @ serializer 0x002829E0..0x283200; record serializer 0x0027D350
+- [CONFIRMED] Open-race record (0x4C bytes) layout and the stable cross-copy race key
+    @ careerData+0xA5C array; ctor 0x0027D0A0; serializer 0x0027D350
+- [CONFIRMED] Start a specific career race by UniqueId (what the cruise hookman calls)
+    @ 0x00277990 StartRace(u16 id); 0x00277AE0 SetupCareerRace(u16 id); 0x00278270 SetupNextCareerRace; 0x002779D0 Progress(bool)
+- [CONFIRMED] Race state machine mcRaceStateDerived (global 0x557EEC): EnterState / Update and state numbering
+    @ vtable 0x4691B8 (ctor 0x1C3C60, stored at 0x1C3CEA); vtbl+4 0x1C22D0 (guard) -> vtbl+0x18 0x1C3B70 EnterState; vtbl+8 0x1C3610 Update
+- [CONFIRMED] Race-finished handler: computes win/lose and reports to the career
+    @ 0x001C2B00 (race state 7 enter); wrapper 0x001D1810 (mcRaceBase, arg result)
+- [CONFIRMED] Racer info entry (0xB8 bytes) and race object fields
+    @ race+0x98+i*0xB8 (pointer array race+0x65C; vtbl+0x54 GetRacerInfo 0x1C3E80; vtbl+0x58 NumRacers 0x1D0B20 = [[0x558838]+0x28]); ctor 0x1D2070 (vtable 0x469D14)
+- [CONFIRMED] Checkpoints: loading layout and crossing test
+    @ mcRaceBase::LoadCheckpoints 0x001CDC80; crossing test 0x001CF8B0; wrappers 0x001D1510 / 0x001D1550
+- [CONFIRMED] Finish detection to race state 7 (offline and network)
+    @ 0x001E06E0 (racer-finished handler of race class vtable 0x46B4B8, vtbl+0x64); also 0x1C5C30, 0x1DA070, 0x1DD600 (other race types)
+- [CONFIRMED] Money reward for a career race (separate from ReportRaceResult)
+    @ 0x001CFC50 (race; once per race)
+- [CONFIRMED] mcTkTournament::ReportRaceResult (multi-race events)
+    @ 0x00264D80 (vtable 0x470360 slot 4)
+- [CONFIRMED] Game setup structs (next/current/spare) used to load a race
+    @ globals 0x53F2E4 (next), 0x53F2E0 (current), 0x53F2E8; each 0x3E0 bytes, ctor 0x26B9E0 (alloc at 0x268D00)
+- [GUESS] Practical hook to credit the partner's win in the local career
+    @ 0x001C2B44..0x001C2B55 (or racer info +0x5D before EnterState(7))
+OPEN: ["Global [0x53F2D4] == 2 is used everywhere as the career gate, but the name of each mode value is not confirmed. The table at 0x448488 holds 'filler/hookman/tournament/classrace/worldchamp/garage/career/arcade', but it is indexed by another field (loader +0x60), not by 0x53F2D4.", 'The game-state numbers on [0x557ED0] (mcGameState, EnterState 0x21D30) used by Progress (8 then 6 / 0x10 / 0x12 / 0x16) are not mapped to names yet. Only their use (load race/cruise, event, garage, front end) is inferred.', 'The hookman path calls 0x277990 at 0x1D917A. The exact code that then calls SetupNextCareerRace + Progress to begin loading was not traced. Candidates are 0x1D65C0/0x1D6680/0x1D8A10 and 0x1E2F70, the callers of 0x278270.', "Filler races are generated from careerData+0xB14 Seed. A partner's open list may not contain the host's (City, RaceIdx). The co-op then needs either a sync of that race record into the partner's +0xA58 vector (record ctor 0x27D0A0, insert 0x282630) or a no-credit fallback.", 'Per-race-type finished handlers differ: 0x1E06E0 belongs to vtable 0x46B4B8; the 0x1C5C30, 0x1DA070 and 0x1DD600 classes were not checked. Which race class each career race type uses (race+0x10 values 1, 3, 4, 5, 6, 0x10, 0x14...) is still unmapped.', 'The existing network session object [0x557EFC] (+0x10 local net index, +0x14 player mask, +0x18 host index, vtbl+0x130 broadcast race state) may be reusable to sync race end; it was not analyzed further here.']
+==================== ai-traffic
+SUMMARY: Map of the AI opponents, traffic and multiplayer car slots (static analysis only). Addresses are VAs. Code starts at 0x10000, so functions sit around 0x0001xxxx–0x0037xxxx.
+
+KEY RESULT FOR THE CO-OP: AI opponents and human players are built through the same car factory into the same vehicle class. Base factory 0x361B30 makes a 0x3138-byte car with ctor 0xF4430, then applies a 0x108-byte car record with 0xF32A0, which sets tuning, parts, paint and the plate. The only difference is where the car record comes from:
+- AI: race descriptor +0x64.
+- Player i: game-settings slot i +0x120 (a pointer to a 0x108-byte record that the settings object owns).
+
+The game's split-screen (2 local players) and network modes (up to 8, mask from the session object 0x557EFC) already create one full player object per settings slot, each built from that slot's record. So the cleanest way to show the partner's own campaign car is:
+- put the partner's garage record into slot 1 +0x120 (copy with 0x271E20, like 0x268E50 does);
+- set players = 2 at settings+0x4C;
+- let the player manager build it.
+
+The local garage is an array of 0x108-byte records at 0x541700, the same format as the slot record.
+
+POOLS:
+- Players: 8 settings slots and 8 player-manager slots.
+- Split-screen: at most 2.
+- Racer list at 0x558838: 10 pointers. Players plus competitive AI must be 10 or fewer; nothing checks the bound.
+- Non-competitive AI per race-list entry: 4.
+- Opponent name pool: 61 names (Tokyo has its own 30).
+- Traffic: no fixed number in code. The count comes from the city's "_traffic" resource (traffic manager +0x12C), with 0x21C-byte entries.
+
+Rubber banding is computed per AI from distance thresholds and throttle limits set in the race file. Which human it measures distance to was not found.
+- [CONFIRMED] Global game-settings / race-setup object (0x3E0 bytes) used to build every race: current = [0x53F2E0], two more copies at [0x53F2E4] and [0x53F2E8]
+    @ 0x53F2E0 (ctor 0x26B9E0, allocated in 0x268D00)
+- [CONFIRMED] Settings field +0x4C = number of human players / player racers. +0x50 = number of local viewports (split-screen screens). Split-screen sets both to n (at most 2) and slot[i]+0x124 = i. Network / System Link sets +0x4C to between 2 and 8 with +0x50 = 1
+    @ settings+0x4C, settings+0x50 (getter 0x2693C0 returns +0x4C)
+- [CONFIRMED] Settings player slot i (0x2C bytes at settings+0x114+i*0x2C, ctor 0x2766C0). +0x0C (= settings+0x120+i*0x2C) is an OWNED pointer to a 0x108-byte CarRecord (ctor 0x271D20; model name at +0xE3). +0x10 (+0x124) = controller pad index. +0x14 (+0x128) = HUD player number. +0x18 (+0x12C) = -1 when unused. +0x20 (+0x134) = team. +0x26 (+0x13A) = flag that excludes the slot from racing
+    @ settings+0x114 + i*0x2C (i = 0..7)
+- [CONFIRMED] How a player slot gets its car: CarRecord::CopyFrom (0x272010 jumps to 0x271E20) copies a garage entry into slot+0x120 for the 2 local players. Local garage = array of 0x108-byte CarRecords at 0x541700, indexed by the selected-car s16 at 0x53F2FE (2 entries, i.e. 2 local players). Alternative table 0x53F810 is used when the byte at 0x53F2FC[i] is 0
+    @ 0x268E50 (settings copy-garage-cars-to-slots); garage 0x541700; selected index 0x53F2FE[2]
+- [CONFIRMED] Player manager singleton (0x74 bytes, vtable 0x47615C): +0x08[8] = player objects, +0x28 = count (= settings+0x4C). GetPlayer(i) = 0x2BD910, IsSlotRacing(i) = 0x2BD920. The ctor creates one player (0x2EC bytes, ctor 0x2BFE50) per slot whose create-mask bit is set
+    @ [0x558814] (created in 0x2BE2C0, ctor 0x2BE100)
+- [CONFIRMED] Player create-mask (0x2BD810). In a network game (settings+0x108 != 0), a slot i < numPlayers gets a player object if slot+0x26 == 0 and bit i is set in the session connected-mask [[0x557EFC]+0x14]. Otherwise only slot settings+0x3D8 (the local index) does. So remote network players already get full player objects and cars
+    @ 0x2BD810
+    VERIFY: wrong — Code: bl = (i < count). Only if settings+0x108 != 0 (002BD82E) are extra conditions applied: slot+0x26==0 (002BD83D..002BD84D) AND, if [0x557EFC]+0x10 >= 0, bit i of [[0x557EFC]+0x14] (002BD85F), else i == settings+0x3D8 (002BD869..002BD873). When settings+0x108 == 0, EVERY slot i < numPlayers gets  | CORRECTED: mask[i] = i<numPlayers && (!s[0x108] || (slot+0x26==0 && (sess+0x10>=0 ? (sess+0x14 & 1<<i) : i==s[0x3D8])))
+- [CONFIRMED] The player car is built from slot+0x120 by mcPlayerFactory: ctor 0x2CB270 (vtable 0x476940), Build 0x2CBC40. The result is stored at player+0x14 (the racer's car pointer)
+    @ 0x2C0021..0x2C005E (inside player ctor 0x2BFE50)
+- [CONFIRMED] AI opponents are built with the SAME vehicle class and the SAME record-apply function as players, through an opponent factory (ctor 0x1FA970, vtable 0x46C730, Build 0x1FB040). Both factories derive from base 0x361B30, whose +0x54 = CarRecord*
+    @ 0x1FA970 / 0x1FB040 (called only from 0x1ED2F0)
+- [CONFIRMED] Current race object: [[0x533E24]+0x04] (mcRaceBase-derived). +0x18 = number of AI opponents. +0x2C = array of 0x88-byte opponent descriptors. +0x98 + i*0xB8 = embedded per-player racer-progress entries. +0x658 = array of 0x60-byte AI racer-progress entries (ctor 0x1D2130). +0x65C = pointer array [numPlayers + numOpp]: players first, then AI
+    @ race+0x18 / +0x2C / +0x98 / +0x658 / +0x65C (built in 0x1CD380 and 0x1D9720)
+- [CONFIRMED] Number of opponents in a race = popcount of settings+0x3D4 (the enabled-opponent bitmask) over the race file's opponent count. The race-file loader 0x1D3AE0 fills each 0x88 descriptor
+    @ 0x26B0C0 (count), 0x1D3AE0 (race opponent loader)
+- [CONFIRMED] Opponent descriptor layout (0x88 bytes, race+0x2C + i*0x88). +0x00 AI type (0 racer, 2 cop when cartype is a cop). +0x01 enabled-at-start flag (from DisabledAtStart). +0x02 RespawnCop. +0x03 AttackPlayersOnly. +0x04..07 CopBehave Ram/Nudge/Block/Alongside. +0x09 isCompetitor (0 when NonCompetitorAI). +0x0C ThrottleLimit. +0x10 InitialSpeed. +0x14 RubberBandMinDist. +0x18 MaxDist. +0x1C MinThrottle. +0x20 MinSpeed. +0x24 BehindMinDist. +0x28 BehindMaxDist. +0x2C BehindMaxThrottle. +0x30/+0x34 OutsideTraffic ThresholdSpeed/Penalty. +0x38..+0x44 start pos xyz + heading. +0x48 route (0x30-byte object, ctor 0x1E6BC0, parsed by 0x1E6360). +0x64 CarRecord* (0x108, ctor 0x271D20, type set by 0x272F70(cartype))
+    @ descriptor struct (filled in 0x1D3D60..0x1D4235)
+- [CONFIRMED] AI opponent manager singleton (0x10 bytes): +0x00 count (= race+0x18), +0x04 competitive count, +0x08 array of 0x43C-byte opponent entries (ctor 0x1EC2D0, vtable 0x46BEA0). Filled by OppMgr::Init 0x1E43C0, which runs only when settings+0x10D (AI enabled) is set. Each entry is initialized by 0x1ED2F0(i, desc, i, arg)
+    @ [0x534074] (created 0x1E4390, Init 0x1E43C0)
+- [CONFIRMED] Opponent entry layout (0x43C bytes). +0x0C embedded racer base (ctor 0x2C8420, vtable 0x46BE80; the same base class as the player object), so entry+0x20 = racer+0x14 = car pointer. +0x54 u16 index. +0x5C AI driver object. +0x68 AI kind. +0x7C sub-object (ctor 0x1EAF20). +0xDC InitialSpeed
+    @ 0x1EC2D0 ctor, 0x1ED2F0 init
+- [CONFIRMED] AI driver selection in 0x1ED2F0 (stored at entry+0x5C, kind at +0x68). First, special race types (race+0x10 in 10..20, via jump table): 0x1F9EC0 (0x21C bytes, kind 4), 0x1F92D0 (0x220, kind 5), 0x1F8BC0 (0x1D4, kind 6). If settings+0x48 is set: 0x1F8680 (kind 7). Otherwise by desc+0x00: 0 -> race opponent 0x1F8490 (0x1BC bytes, vtable 0x46C490, kind 1, gets route desc+0x50); 1 -> 0x1E5100 (kind 1); 2 -> cop 0x1EF8B0 (0x23C, kind 3); else -> base driver 0x1EBE40 (0x1B4, kind 0). All are built from route desc+0x48. Rubber-band and throttle params are copied from the desc into driver +0x74..+0x94
+    @ 0x1ED2F0
+    VERIFY: holds — 001ED382..001ED398 race+0x10-10 <=10 via byte table 0x1ED940 + jmp [eax*4+0x1ED930]; 0x1F9EC0 kind4, 0x1F92D0 kind5, 0x1F8BC0 kind6; 001ED450 settings+0x48 -> 0x1F8680 kind7; desc+0: 0 -> 0x1F8490 (0x1BC) + 0x1E93F0(desc+0x50), 1 -> 0x1E5100 (0x258), 2 -> 0x1EF8B0 (0x23C) kind3, else 0x1EBE40 (0x1B4
+- [CONFIRMED] Rubber banding is applied in the AI driver Update (0x1EB540). When car speed (entry+0xCC) > MinSpeed (+0x74) and gap d = driver+0x20 > 0 (AI ahead): t = clamp01((d - MinDist[+0x78]) / (MaxDist[+0x7C] - MinDist)), throttleLimit[+0x28] = lerp(base[+0x24], MinThrottle[+0x80], t). When AI is behind: t uses BehindMin/Max (+0x84/+0x88) and BehindMaxThrottle (+0x8C). Then scaled by the global difficulty float [0x4B3580]
+    @ 0x1EB540 (0x1EB79C..0x1EB8BF)
+- [CONFIRMED] Racer list singleton (0x2C bytes = 10 pointer slots plus count at +0x28), rebuilt by 0x2C8710. Order: one entry per player slot (the player object, or NULL), then &opp[j]+0x0C for each opponent with desc+0x09 (competitor). No bound check, so players + competitive AI must be 10 or fewer. A non-racing player slot with slot+0x18 != -1 is put into 'observer' camera mode. The index in this list equals the index in race+0x65C
+    @ [0x558838] (created 0x2C86E0, rebuild 0x2C8710, remove 0x2C85C0)
+- [CONFIRMED] Race-list entry parser (career/race catalogue). +0x00 RaceType, +0x04 AmbientDensity, +0x08 PedDensity, +0x0C weather, +0x0D time, +0x0F OpponentCount, +0x10 NumLaps, +0x27 CutSceneBitMask, +0x28[4] non-competitor car types (|0x80 = cop; at most 4, asserts 'PushNonCompetitiveOpponentCarIndex'), +0x0E total AI = opponents + non-competitors + cops
+    @ 0x26DA70
+    VERIFY: holds — Time (0x44D8B8) -> 0026DAD5 [edi+0x0D]; Weather (0x469930) -> 0026DB02 [edi+0x0C]; RaceType (0x4714F0) -> 0026DB31 [edi]; AmbientDensity/PedDensity -> +0x04/+0x08; StartBeaconPosition -> +0x14 (not listed by analyst); OpponentCount -> 0026DC71 +0x0F; NumLaps -> +0x10; CutSceneBitMask -> +0x27; NonCo
+- [CONFIRMED] Opponent display names: pool 'Opponent_%02d' modulo 61 (0x3D), Tokyo uses 'OpponentTokyo_%02d' for the first 30 (city == 3). Name is set through the racer-progress vtable +0x0C on race+0x658 entries. In network mode ([0x53F2D4]==2), player names are filled the same way from race vtable +0x5C/+0x60
+    @ 0x1D15B0
+    VERIFY: wrong — Pool part holds (001D16DE mov ecx,0x3D; div; 001D16F5 city==3; 001D16FF cmp edi,0x1E; strings 0x469CC0/0x469CD0; 001D17C6 call [edx+0x0C]). But the [0x53F2D4]==2 branch (001D15E4..001D1664) names the AI racer-progress entries at race+0x658 (stride 0x60), not players, using a per-city named-racer tab | CORRECTED: In career mode ([0x53F2D4]==2) the first race->vt[0x5C]() AI entries get career named-racer names from [[0x557EE4]+city*0x50+0x2C][race->vt[0x60](i)]
+- [CONFIRMED] Traffic system root (12 bytes): +0x00 headlight glow tex, +0x04 star tex, +0x08 traffic manager. The manager is loaded in place from "$/resources/city/%s_traffic" when settings+0x10B (traffic on) is set. Its vtable is 0x44CE90: [0] dtor 0x6D890, [2] Init 0x6C840, [3] 0x69FA0, [6] returns "tune/traffic"
+    @ [0x50152C] (created 0x6B8A0, load 0x6D9F0, fixup 0x6D4B0)
+- [CONFIRMED] Ambient traffic vehicle pool. The traffic manager +0x12C (s16, comes from the resource) is the pool size. +0x130 = array of that many 0x21C-byte ambient vehicles (ctor 0x78070, vtable 0x44D1CC; a light class, NOT the 0x3138 player/AI car). +0x30/+0x34 = ambient types (ptr array, u16 count); type->+0x5C->+0x06 = instance count per type; each vehicle is initialized by 0x71AC0(type, 0, idx). +0x13C = count/30 + 1 (update slices). +0x11C = tune/traffic object (0x28 bytes, ctor 0x7F8C0). The pool is only allocated when [0x5587E0]+0x38 != 0
+    @ 0x6C840 (traffic Init)
+- [CONFIRMED] Race-scripted ('controlled') ambient vehicles: race+0x788 (u16 count) and race+0x784 (array, stride 0xB8) are added to the traffic manager by 0x6D910 -> 0x6D7D0. They go into a growable vector at traffic+0x14+0x0C ({ptr, u16 count, u16 cap}, 0x21C entries, grows by 8). The 'Ambient Vehicles is not suported for no traffic option' assert fires when the ambient-type array (+0x10) is NULL
+    @ 0x6D910 / 0x6D7D0 / 0x6D8B0 (called from race 0x1CDB30 and 0x1D6FA0)
+- [CONFIRMED] aiCurveCatrom (Catmull-Rom spline) is one of 3 curve types (type byte 0/1/2 -> base 0x354580, 0x35CAF0, aiCurveCatrom 0x35D1D0 with vtable 0x4A489C). They are fixed up in place inside a loaded path/road resource by 0x35AAC0, which is called from resource loader 0xEED70. This is the road/path geometry layer, not per-opponent state
+    @ 0x35D1D0 (ctor), 0x35CDD0 (GenerateCubics), 0x35AAC0 (curve-set fixup)
+- [GUESS] [0x53F2D4] = front-end/game-flow mode; value 2 = online/network game (tested before net-specific code). Settings+0x108 = network-game flag, and settings+0x3D8 = local player's slot in a network game
+    @ 0x53F2D4, settings+0x108, settings+0x3D8
+    VERIFY: wrong — [0x557F0C] is the mcPgCareer singleton: ctor 002781A5 mov [0x557F0C],esi, and every caller of mcPgCareer::ReportRaceResult 0x277EE0 (asserts at 0x473C7C) passes ecx=[0x557F0C] (0016225E, 0016A72C, 0018C5D4, 001D183C...). [0x53F2D4]=2 is written in 0x142E20 (00142EC5) and 0x1843A0 (00184441) right af | CORRECTED: [0x53F2D4]==2 = career mode; [0x557F0C] = mcPgCareer singleton
+- [CONFIRMED] Settings boolean flags copied from defaults at 0x4B36B0..0x4B36B4: +0x10B = traffic enabled (gates traffic load), +0x10D = AI opponents enabled (gates OppMgr::Init). +0x10A, +0x10C and +0x10E were not identified
+    @ settings+0x10A..+0x10E
+    VERIFY: holds — 00268FA2 [0x4B36B1] -> [0x53F2E4]+0x10B; 00268FB3 [0x4B36B3] -> +0x10D; 00268FC4 [0x4B36B2] -> +0x10C; 00268FD6 [0x4B36B4] -> +0x10E (all defaults = 1). Written to the 0x53F2E4 copy. 0006DA6E uses +0x10B for traffic; 001E43CB uses +0x10D for opponents. Additional: +0x10F gates the traffic resource l
+OPEN: ['Which human does the rubber-band gap (AI driver +0x20) measure against? The writer of driver+0x20 was not found. With 2 humans, check whether it picks the leader, player 0 or the nearest player.', 'Exact field layout of the 0x108-byte CarRecord (ctor 0x271D20, CopyFrom 0x271E20, apply 0xF32A0). Known so far: name at +0xE3, string at +0xF9 checked against "blank", plate charset used in 0xF32A0, bytes +0x14..+0x1C and dwords +0x0C/+0x10 used as tuning. These bytes are what must be sent to the partner.', "How does a remote network player's car receive input and transforms? The player object (0x2EC bytes, vtable 0x476498) at +0x54 holds a 0x80-byte object (0x2C70E0, probably camera/viewport) and +0x6C a 0x14D0-byte object (0x3350F0); the network sync class was not traced.", 'Does split-screen (settings+0x50 = 2) run career/campaign races, or only arcade? A co-op that forces +0x4C = 2 with +0x50 = 1 (a second player car with no viewport, like the network path) may be the cleanest. This needs a check that HUD/camera code handles slot 1 having no local pad (slot+0x124).', 'race+0x98 holds 8 embedded player progress entries ((0x658-0x98)/0xB8 = 8). Is this the max players per race, and what are their fields (position, lap, finish time, needed for crediting both careers)?', 'Race type ids (race+0x10, 10..20) that select special AI drivers 0x1F9EC0/0x1F92D0/0x1F8BC0, and the settings+0x48 mode that selects 0x1F8680, were not named.', "The traffic pool size (+0x12C) comes from each city's _traffic resource; its actual value needs reading from the resource file or at runtime."]
+==================== save-progress
+SUMMARY: I mapped how the career is saved and what a race win changes. Everything comes from static reading of the generated asm comments and default.xbe; nothing was run.
+
+Globals:
+- [0x557F0C] = mcPgCareer*.
+- [mcPgCareer+0x0C] = career data object, the part that is serialised. It holds money at +0xACC, the current city at +0x50, the open-race list at +0xA58, the won/skipped counters at +0xA78/+0xA7A, and the 'Beaten' flags of hookmen at +0xAA0.
+- 0x53F308 = global profile/config block of 0x18340 bytes, copied whole into the save. It holds the garage: owned-car count is the byte at 0x53F80C (max 0x1E = 30), the selected car is the byte at 0x53F80D, and the car records start at 0x53F810 with a stride of 0x108.
+- [0x4CB690] = the mcMemCard singleton. Its state is at +4: 10 = save a new profile, 100 = save the current profile, 120 = save variant (GUESS), 130 = load, 140 = cancel. mcMemCard::Update is 0x1A9E0 and is pumped every frame from 0x1F9D0.
+
+The game's own save flow: `ecx=[0x4CB690]; push 0,0,0,0,1; call 0x19360`. It only works if a profile is loaded (byte [memcard+0x334B4] != 0). On the next Update, 0x1A550 serialises the profile and the career into the memcard buffer and calls 0x22040, which writes save game "Remix : <profile>", file "<profile>.mc3Remix".
+
+Race end:
+- mcRaceStateDerived (vtable 0x4691B8) state 7 runs 0x1C2B00. It awards prize money (0x1CFC50: money += prize) and then calls 0x1D1810, which calls mcPgCareer::ReportRaceResult (0x277EE0) with result 0 = won, 1 = lost.
+- A win with career sub-state [pgCareer+0x24]==4 calls 0x277530. That moves the race out of OpenRaces (CloseRace 0x281130, which increments NumberOfWonRaces), can mark a hookman beaten (0x281370), updates the per-city beaten table and sets the dirty byte [pgCareer+0x20]=1.
+- Then race state 11 (0x1C33E0) autosaves through 0x19360 when the career dirty flag or the garage dirty flag (0x557648) is set.
+- Career credit and autosave are both skipped when [0x53F2D4] != 2 (not career mode) or when mcGameState ([0x557ED0]) +4 == 3. State 3 is very likely replay playback (GUESS).
+
+The debug career log "%sMC_Career_log_%s.txt" is dead in this retail build. Two functions format it into a stack buffer with "c:\\" and the profile name, and the buffer is never used. Nothing logs to it, so progress has to be watched through the fields below.
+- [CONFIRMED] Pointer to the career manager mcPgCareer (global)
+    @ 0x00557F0C
+    VERIFY: holds — I saw all three call sites in the asm: 0x1D183C 'mov ecx,[0x557F0C]' then 0x1D1843 'call 0x277EE0'; 0x1A5D5/0x1A5DB 'call 0x277250'; 0x195EB/0x195F7 'call 0x277E20'. The string at 0x473C7C is 'mcPgCareer::ReportRaceResult(): unsupported game state: %d' and it is pushed at 0x277FB2 inside 0x277EE0. 0
+- [CONFIRMED] mcPgCareer member layout
+    @ mcPgCareer+0x0C/+0x10/+0x14/+0x20/+0x24/+0x28/+0x2C/+0x30/+0x56/+0x58/+0x5C/+0x60
+- [CONFIRMED] Career data object (the serialised career) and its fields
+    @ [[0x557F0C]+0x0C] + offsets
+    VERIFY: holds — I resolved every pushed name string in 0x2829E0 against the default.xbe bytes. They match the lea offsets: 0x474274 CurrentCareerCity at +0x50, NumOpenRaces at +0xA58, NumPutAsideRaces at +0xA68, NumHistoricRaces at +0x55C (ring of 30 x 0x20; count [+0x55C+0x3C8]=+0x924, head +0x91C), PreviousRacesC | CORRECTED: Add +0x5A: NumLongTermRaceInfos (u16 array). BeatHookman writes Beaten at careerData+0xAA0 + hm.dword(+4)*10 + hm.short(+8) (0x281385-0x2813A6), so it is a 2-D table with 10 entries per row, not a flat index.
+- [CONFIRMED] Career money field
+    @ [[0x557F0C]+0x0C]+0xACC (int32)
+    VERIFY: holds — Seen at 0x1CFC8F 'mov ebx,[eax+0x0C]', 0x1CFCC9 'call 0x2840E0', 0x1CFCCE/0x1CFCD5/0x1CFCD7 'add' into [ebx+0xACC'], and at 0x142C31-0x142C45 (the amount comes from [ebp+0x78]). The deserialiser reads 'Money' into +0xACC through the int reader 0x291B20 (0x28301C).
+- [CONFIRMED] Open-race entry layout and lookup by unique race id
+    @ OpenRaces element (0x4C bytes); lookup 0x27EFF0 / 0x27EAC0; index-to-pointer 0x27F010
+- [CONFIRMED] mcPgCareer::ReportRaceResult(int result): result 0 = won, 1 = lost, 2/3/4 = other quits, 5 = quit to front end/cruise, 6 = end of race (choose garage)
+    @ 0x00277EE0
+    VERIFY: holds — I traced all the branches. The career-only guard is at 0x277EE0-0x277EEE. The 'apply win' call 0x277530 at 0x277FE1 runs only when +0x56==0, +0x24==4 and +0x28 (the result)==0. 0x2893C0 is then called on [esi+0x10] at 0x277FE9. The caller push values are as stated (0x16A369 push 4, 0x16A732 push 3, 
+- [CONFIRMED] Apply race win to the career data: close the race, increment the win counter, mark a hookman beaten, update the per-city beaten table
+    @ 0x00277530 (calls CloseRace 0x281130 via 0x281E40, BeatHookman 0x281370, 0x283970)
+- [CONFIRMED] Prize money award at end of race (runs before ReportRaceResult)
+    @ 0x001CFC50 (race object method; called from race state 7 = 0x1C2B00)
+- [CONFIRMED] Race end sequence in mcRaceStateDerived (vtable 0x4691B8; SetState = vtbl+0x18 = 0x1C3B70; RequestState = vtbl+4 = 0x1C22D0; Update = 0x1C3610): state 7 = report the result, state 11 = autosave
+    @ 0x001C3B70 (SetState jump table at 0x1C3C28); 0x001C2B00; 0x001C33E0
+- [CONFIRMED] Post-race autosave: checks the dirty flags and requests a memcard save
+    @ 0x001C33E0
+    VERIFY: holds — I saw all the conditions in the asm. The branch to 0x19630 (state 120) needs [[0x557EFC]+0x10] >= 0, that value != [[0x557EFC]+0x18], [[0x53F2E0]+0x48] != 0 and the profile name at 0x1C3432. The dirty branch is 0x1C3479 'call 0x197F0' and then the profile name check at 0x1C3488. 0x197F0 returns 1 if
+- [CONFIRMED] mcMemCard singleton pointer and the Update state machine
+    @ global 0x004CB690; Update 0x0001A9E0
+- [CONFIRMED] How to trigger the game's own save flow (request functions)
+    @ RequestSave 0x00019360 (state 100); 0x00019630 (state 120); 0x000197E0 (state 10, new profile); 0x00019720 (state 130, load); 0x000197B0 (state 140); IsDirty 0x000197F0
+- [CONFIRMED] Save serialisation into the mcMemCard buffer (state 100 handler)
+    @ 0x0001A550
+    VERIFY: holds — I saw every quoted line. 0x26BD10 copies 0x60D0 dwords from its argument to ecx ('rep movsd'), so the save copies 0x53F308 into memcard+0x14. The +0x60 completion value is converted with ftol 0x2DAE60 and stored at +0x18354; the city [[pgCareer+0xC]+0x50] goes to +0x18355; the 0x277250 blob goes to  | CORRECTED: Also note: profile dirty byte 0x557648 == 0x53F308+0x18340, cleared by 0x26BD00 at 0x1A623.
+- [CONFIRMED] mcMemCard object layout
+    @ [0x4CB690] + offsets
+    VERIFY: holds — Seen: +4/+8/+0xC/+0x10 in 0x1A9E0/0x1A550; +0x14, +0x18354, +0x18355, +0x18358; +0x334B4 written by snprintf (size 0x40) at 0x1A7A7-0x1A7B0 and used at 0x1ABED; +0x334F4/+0x334F8 as the callback; +0x334FC as the device. The save list at +0x33504 has stride 0x64 (0x1A753), timestamp bytes at +0x50..+
+- [CONFIRMED] Save file names: XSaveGame 'Remix : <profile>', file '<profile>.mc3Remix' (.mc3 / 'mc3' variant when byte flag 0x4CB694 is set)
+    @ 0x00022040 (write), 0x00022310 (read), 0x0002AA20 (create save game via 0x324A2B)
+- [CONFIRMED] Load and boot autoload
+    @ 0x0001AB90 (boot: enumerate saves, pick the newest, load), 0x00019560 (read and apply a profile), 0x00019730 (state 130 read)
+- [CONFIRMED] Global profile/garage block (saved whole): owned-car count, selected car, car records
+    @ 0x0053F308 (size 0x18340 saved); count byte 0x0053F80C (=+0x504); selected byte 0x0053F80D (=+0x505); cars at 0x0053F810 + i*0x108
+- [GUESS] Race result reporter on the race object; skips career credit when game state == 3 (replay)
+    @ 0x001D1810
+- [CONFIRMED] Debug career log '%sMC_Career_log_%s.txt' is dead code in retail
+    @ string 0x004483EC; used in 0x00019560 and 0x0001A680
+- [CONFIRMED] Career-mode flag and race-config pointer used by the save and credit guards
+    @ 0x0053F2D4 (game type; 2 = career), 0x0053F2E0 (pointer to the current race config)
+OPEN: ["Crediting the partner's career for a race won in the host's world: 0x277530 looks up the current race id (careerData+0x58) in the partner's own OpenRaces list and does not check for -1. Before reporting result 0 on the partner's machine, the same race (unique id at entry+0x04) must exist there. Otherwise it should be faked another way, for example by adding money and NumberOfWonRaces directly, or by calling CloseRace 0x281130 with the partner's own matching race index. Who writes careerData+0x58 (the current race id) when a career race starts is not yet mapped.", 'Race ids come from UniqueRaceIdCounter (+0xB18) and a Seed (+0xB14), so two careers will normally have different open-race lists and ids. A mapping by city + race definition (entry+0x08/+0x0A/+0x25) may be needed instead of by id.', 'What [[0x53F2E0]+0x48] means (it chooses between save path state 100 and state 120 in 0x1C33E0 and changes the 0x212E0 setup), and what mcMemCard state 120 (0x19660, loops on 0x22220 then writes) does exactly.', '[mcPgCareer+0x56] blocks applying the win when it is non-zero. Its setter and meaning are unknown (maybe a tournament or special-event flag).', 'Whether mcGameState ([0x557ED0]+4) == 3 is really replay and not a network-race mode. If online races use another mode, check that ReportRaceResult and the autosave are not suppressed in the co-op path ([0x53F2D4] must remain 2).', 'The full meaning of the 0x108-byte owned-car record at 0x53F810 (model, parts, paint, vinyls) was not decoded here. That belongs to the car-config area; only its location, count and selected index are confirmed.', '0x1AB90 boot-autoload argument semantics (push 1; push 0) and the 0x4CB694 flag (.mc3 legacy import vs .mc3Remix) are not fully confirmed.']

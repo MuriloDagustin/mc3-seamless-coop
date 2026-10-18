@@ -29,6 +29,8 @@
 
 #include "mod.h"
 #include "overlay.h"
+#include "car.h"
+#include "net/session.h"
 
 namespace mod::scan {
 std::string Run(const std::vector<std::string>& a);
@@ -137,6 +139,41 @@ std::string Run(const std::string& text) {
         return buf;
     }
     if (c == "state") return game::State();
+    if (c == "players") return coop::Players();
+    if (c == "nick" && a.size() > 1) {
+        coop::RequestNickname(text.substr(text.find(a[1])));
+        return "ok";
+    }
+    if (c == "rescue") {
+        coop::RequestRescue();
+        return "ok";
+    }
+    if (c == "place" && a.size() > 3) {  // the local car moved there, facing as it is
+        car::Pose p;
+        if (!car::Local(p)) return "error no car";
+        for (int i = 0; i < 3; i++) p.m[3][i] = float(std::atof(a[1 + i].c_str()));
+        car::Place(p);
+        return "ok";
+    }
+    if (c == "coop") {
+        auto port = [&](size_t i) { return uint16_t(a.size() > i ? std::atoi(a[i].c_str()) : coop::kDefaultPort); };
+        if (a.size() == 1) return coop::Status();
+        if (a[1] == "host") coop::RequestStart(coop::Role::Host, {}, port(2));
+        else if (a[1] == "join" && a.size() > 2) coop::RequestStart(coop::Role::Join, a[2], port(3));
+        else if (a[1] == "online" && a.size() > 2 && a[2] == "host") coop::RequestOnline(coop::Role::Host);
+        else if (a[1] == "online" && a.size() > 3 && a[2] == "join") coop::RequestOnline(coop::Role::Join, a[3]);
+        else if (a[1] == "search") coop::RequestSearch(port(2));
+        else if (a[1] == "stop") coop::RequestStop();
+        else if (a[1] == "session") {
+            coop::Session s = coop::GetSession();
+            std::string out = "status=" + s.status + " running=" + std::to_string(s.running) + " online=" +
+                              std::to_string(s.online) + " code=" + s.room_code + " players=" + std::to_string(s.players) +
+                              " error=" + s.error + "\n";
+            for (auto& srv : s.servers) out += "server " + srv.address + ":" + std::to_string(srv.port) + " " + srv.name + "\n";
+            return out;
+        } else return "error coop host [port] | join <host> [port] | online host | online join <code> | search | stop | session";
+        return "ok";
+    }
     if (c == "shot") {
         std::string path = a.size() > 1 ? text.substr(text.find(a[1])) : "shot.bmp";
         std::wstring wide(path.begin(), path.end());
@@ -198,6 +235,7 @@ std::string Run(const std::string& text) {
         }
         return "ok";
     }
+    if (c == "hostfind" && a.size() > 1) return HostFind(Hex(a[1]), a.size() > 2 ? std::atoi(a[2].c_str()) : 40);
     if (c == "scan") return scan::Run(a);
     if (c == "mats") return scan::Matrices(a);
     if (c == "find" && a.size() > 1) return Find(a, false);

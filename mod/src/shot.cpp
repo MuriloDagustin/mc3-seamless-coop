@@ -67,3 +67,7 @@ std::string Shot(const std::wstring& path) {
 }
 
 }  // namespace mod
+
+namespace app {
+void* Window() { return mod::GameWindow(); }
+}  // namespace app

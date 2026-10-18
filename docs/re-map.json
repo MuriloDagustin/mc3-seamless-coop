@@ -1,0 +1,1286 @@
+{
+ "find:car-config": {
+  "summary": "The game describes a customized car with one 0x108-byte class that names itself \"CarCfg\" (vtable 0x4483DC, ctor 0x271D20, copy 0x271E20 with thunk 0x272010). Its reflection/registration function 0x270E80 names every field. CarCfg+0xE3 holds the model name (TypeName, char[0x16]). The rest of the struct holds parts indices (rims, bumpers, body, spoiler, hood...), paint (type, preset, 5 colour XYA + colour-shift), vinyl, logos/decals, chrome/neon/tint colours, performance levels (EngineState0-6, Trans, Suspension, Brake, Tire, Hydraulics) and tuning (camber, ride height, tire width/offset/profile, rim size).\n\nThe live career profile is a static object at 0x53F308. It has 30 owned-car CarCfg slots at 0x53F810 (+0x508, stride 0x108), the owned-car count byte at 0x53F80C (+0x504) and the currently selected garage slot byte at 0x53F80D (+0x505). Per-model stock CarCfgs start at 0x541700 (+0x23F8); there are 127 in the Remix layout. The save copy lives at mcMemCard(0x4CB690)+0x14.\n\nRaces are built from a \"race setup\" object (0x3E0 bytes, ctor 0x26B9E0). There are three globals of this type: 0x53F2E0 (active), 0x53F2E4 (lobby/network) and 0x53F2E8. Each has 8 player entries at +0x114 with stride 0x2C, and entry+0x0C points to that player's CarCfg (absolute: [setup + slot*0x2C + 0x120]). 0x268FF0 copies 0x53F2E4 into 0x53F2E0. The player manager 0x2BE100 then constructs each player (0x2BFE50). That ctor fills an mcPlayerFactory descriptor (0x2CB270, vtable 0x476940; base ctor stores CarCfg* at +0x54) and calls 0x2CBC40. 0x2CBC40 allocates an mcCarCustom (0x3138 bytes, ctor 0xF4430) and applies the CarCfg with 0xF32A0.\n\nThe game's own netcode already sends the whole CarCfg, raw. There are two messages:\n(1) The join/player-info message: base type 0x04, 0x198 bytes, CarCfg at +0x88. The client builds it in 0x2EFF0 from setup slot 0. The lobby picks that car through 0x155920, which by default takes the CAREER garage's current car. The host's join handler 0x2EC80 stores it in [[0x53F2E4] + assignedSlot*0x2C + 0x120].\n(2) The car-config update message: type 0x44, 0x114 bytes, CarCfg at +0x08, slot at +0x110, flag at +0x111. It is sent by 0x25D20 (session vtable 0x449100, slot +0x13C) and received by 0x26370 (+0x1A0, through dispatcher 0x1AF470). The host relays it to everyone else and each peer copies it into the same per-slot CarCfg.\n\nSo the partner's own campaign car (model, parts, paint, vinyls, upgrades, tuning) can travel through the existing path unchanged. A co-op mod has to make sure the partner side picks from the career garage (0x53F2FC == 0). It also has to put the received CarCfg into an active slot of the host's race setup before 0x2BE100 or 0x2BFE50 runs.",
+  "findings": [
+   {
+    "what": "CarCfg = complete description of a customized car (class name string \"CarCfg\"), size 0x108",
+    "address": "vtable 0x4483DC; ctor 0x271D20; dtor 0x19040; copy (operator=) 0x271E20 (thunk 0x272010); field registration 0x270E80",
+    "evidence": "0x19030: mov eax,0x4483E4 (\"CarCfg\"); ret (vtable 0x4483DC+4). 0x19040: mov dword ptr [esi],0x4483DC. 0x271D20: mov dword ptr [esi],0x4483DC. Allocated as push 0x108; call 0x1B3B90; call 0x271D20 (e.g. 0x2766C2..0x2766D9, 0x1D3740..0x1D3753). Arrays use stride 0x108: 0x26C35C add esi,0x108. 0x272010: jmp 0x271E20. 0x271E20 copies [ebp+0xE3]/[ebp+0xF9]/[ebp+0x0C].. and sets [ebx+0x08]=0x3FFF (dirty mask).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "CarCfg field layout (from the registration function 0x270E80; type 3=u8, 1=bool, 4=s16, 6=float)",
+    "address": "CarCfg+0x00..+0x105",
+    "evidence": "0x270E80 does a series of push type; push name; push ptr(lea [edi+off]); push count; call 0x32F3D0. Offsets: +0x08 dirty mask (0x3F7F bits consumed by 0xF32A0). +0x0C/+0x10 Camber0/1 (float). +0x14/15 TireOffset0/1. +0x16/17 RideHeight0/1. +0x18/19 TireWidth0/1. +0x1A/1B RimSize0/1. +0x1C/1D TireProfile0/1. +0x20 RimMdlIdx. +0x21 TireMdlIdx. +0x22 BikeTireMdlIdx. +0x23 BrakeMdlIdx. +0x24 FrontBumperIdx. +0x25 RearBumperIdx. +0x26 SideSkirtIdx. +0x27 BodyIdx. +0x28 SpoilerIdx (0x2711B1 push 0x47257C). +0x29 HoodIdx. +0x2A CarbonFiberHood. +0x2B BlowerIdx. +0x2C WheelieBarIdx. +0x2D OneShotKitIdx. +0x2E BrushGuardIdx. +0x2F FrontGrillIdx. +0x30 TaillightGeomIdx. +0x31 RiderIdx. +0x32 TaillightMaterialIdx. +0x33 ExhaustRear. +0x34 UseSideExhaust. +0x35 ExhaustSide. +0x36..0x3C license 'letter 1..7'. +0x3E LicenseBG. +0x3F PaintType. +0x40 PaintPreset. +0x41..0x4F PaintColorX/Y/A%d x5 (loop 0x2713C0, ebp=edi+0x42, add ebp,3). +0x50..0x54 ColorShift%d. +0x55 NumGradients. +0x56..0x5C EngineState0-6 (loop 0x2719F0). +0x5D/5E TransState0/1. +0x5F/60 SuspensionState0/1. +0x61 BrakeState0. +0x62 TireState0. +0x63/64 HydraulicsState0/1. +0x65/66 UseCustomLogosFront/Rear. +0x67..0x6E CustomFrontMsg1-8. +0x6F..0x76 CustomRearMsg1-8. +0x78 Logos s16[14] (0x271CF5 push 0x0E; 0x271CFB push 0x471EB0). +0x94 Vinyl (s16, 0x271B2D). +0x96 CustomWindowFont. +0xA0 UseDefaultVinylColor. +0xA1/A2 VinylColorA/B. +0xA3 NeonFlashRate. +0xA4 UseChromeDecals. +0xA5 ChromeDecalColorIdx. +0xA6 DecalColorIdx. +0xA7 WindowTintIdx. +0xA8 NeonIdx. +0xA9..0xAF Chrome/RimChrome/ExhaustChrome/RimInsert/Nitrous/Caliper/Hud colour. +0xB0..0xB5 VinylColorA/B X,Y,Alpha. +0xB6..0xD6 *CustomX/Y/A colour triplets. +0xE3 TypeName char[0x16] (vehicle model name). +0xF9..0x105 ProfileName1..13.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Model identity: CarCfg+0xE3 TypeName is resolved against the global vehicle table",
+    "address": "vehicle table ptr [0x557EB0], entry stride 0x28 (name ptr at +0); count word [0x557EB4]; name->index 0x26A6A0; CarCfg::GetVehicleEntry 0x272FA0; CarCfg::SetTypeFromIndex 0x272F70",
+    "evidence": "0x272FA0: add ecx,0xE3; push ecx; call 0x26A6A0; mov ecx,[0x557EB0]; lea eax,[eax+eax*4]; lea eax,[ecx+eax*8]. 0x272F70: mov eax,[edx+eax*8] (from [0x557EB0]); add ecx,0xE3; push 0x16; call 0x20CF50 (snprintf). 0x26CAC0: movzx eax, word ptr [0x557EB4]; ... add ebx,0x28.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Per-model stock CarCfg loaded from tune file tune/vehicle/customdata/<model> (extension from vfunc = \"CarCfg\")",
+    "address": "CarCfg::LoadDefault 0x2733B0 -> 0x273040 (parser 0x32F7D0/0x32F9A0/0x32F840)",
+    "evidence": "0x2733B3: mov eax,[esi]; call [eax+0x04] (returns \"CarCfg\"); push 0x471E98 (\"tune/vehicle/customdata\"); push name; call 0x273040. 0x273040 calls 0x270E80 to register the fields, then 0x32F9A0 (load), then mov dword ptr [esi+0x08],0x3FFF.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Live career profile (static object): owned cars = 30 CarCfg garage slots; owned count; currently selected car",
+    "address": "profile object 0x53F308 (class ctor 0x26CE90 / init 0x26D290, static init 0x378A80). Garage CarCfg[30] at 0x53F810 (=+0x508, stride 0x108). Owned-count byte 0x53F80C (+0x504). Current garage slot byte 0x53F80D (+0x505). Per-model stock CarCfg[127] at 0x541700 (+0x23F8). Per-model unlock objects (0x1BC each, vtable 0x4483D4) at +0xA6F0. Dirty/needs-save byte +0x18340.",
+    "evidence": "0x378A80: mov ecx,0x53F308; call 0x26D290 -> call 0x26CE90. 0x26CE90: lea esi,[ebx+0x508]; mov edi,0x1E; call 0x271D20 (x30). lea esi,[ebx+0x23F8]; mov edi,0x7F (x127 CarCfg). lea esi,[ebx+0xA6F0]; call 0x273100 (x127, stride 0x1BC). 0x26CAC0 resets slot i<30 to TypeName \"blank\" ([edi-0x1EF0]=+0x508) and loads per-model defaults into +0x23F8. 0x13C5A0 SetGarageSlot: lea ecx,[ecx*0x108+esi+0x508]; call 0x271E20; mov byte ptr [esi+0x18340],1. 0x26BB80 RemoveGarageSlot: decrements byte [esi+0x504]. 0x268D80: movzx edx, byte [0x53F80D]; imul edx,0x108; add edx,0x53F810; push edx; mov ecx,[[0x53F2E4]+0x120]; call 0x272010.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Save-game copy of the profile inside mcMemCard",
+    "address": "mcMemCard global [0x4CB690] (size 0x33560, vtable 0x44840C, ctor 0x1A8D0); Remix profile at mcMemCard+0x14; old-format (102-model) profile at +0x1E504",
+    "evidence": "0x1A9B0: push 0x33560; call 0x1B3B90; call 0x1A8D0; mov [0x4CB690],eax. 0x1A8D6: lea ecx,[esi+0x14]; call 0x26CE90. 0x1A8E7: lea ecx,[esi+0x1E504]; call 0x26C320 (0x66 models). How the save copy is synced to/from 0x53F308 was not traced.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Selecting the player's car (career garage car vs stock model) into a race-setup slot",
+    "address": "0x155920 (args: slot, ?, ?, destCarCfg*). Flag byte 0x53F2FC: 0 = career garage, 1 = stock model. s16 0x53F2FE = garage slot / model index.",
+    "evidence": "0x155920: mov al,[0x53F2FC]; jz -> movzx esi, byte [0x53F80D]; imul esi,0x108; add esi,0x53F810. Otherwise movsx esi, word [0x53F2FE]; imul 0x108; add esi,0x541700. Destination defaults to [[0x53F2E4]+slot*0x2C+0x120]; call 0x272010. The garage menu 0x152420 sets FC=1/FE=model (0x152EAB) when [0x50F130] is set, and otherwise FC=0/FE=[ebp+0x731] and copies 0x53F810+slot*0x108 (0x152EB9..0x152F0D).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Race setup object holds per-player CarCfg pointers (8 slots)",
+    "address": "globals [0x53F2E0] (active race), [0x53F2E4] (lobby/network/pending), [0x53F2E8]; class size 0x3E0, ctor 0x26B9E0, reset 0x26B510, copy 0x26B2E0. Player entry i at +0x114+i*0x2C (ctor 0x2766C0, copy 0x276570); entry+0x0C = CarCfg* => [setup + i*0x2C + 0x120].",
+    "evidence": "0x268D00: push 0x3E0; call 0x1B3B90; call 0x26B9E0; mov [0x53F2E4],eax (same for 0x53F2E0/0x53F2E8). 0x26B9E5: lea edi,[esi+0x114]; mov ebx,8; call 0x2766C0; add edi,0x2C. 0x2766C2: push 0x108; call 0x271D20; mov [esi+0x0C],eax. 0x269410: imul eax,0x2C; mov eax,[eax+ecx+0x120]; add eax,0xE3 (slot model name). 0x268FF0: mov ecx,[0x53F2E0]; push [0x53F2E4]; call 0x26B2E0 (lobby setup -> active setup; 0x26B470 loop calls 0x276570 per entry).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Spawning a racer's drivable car from its slot CarCfg (player manager -> player ctor -> mcPlayerFactory)",
+    "address": "player manager ctor 0x2BE100 (vtable 0x47615C) -> player ctor 0x2BFE50 (size 0x2EC, vtable 0x476498) -> mcPlayerFactory init 0x2CB270 (vtable 0x476940, base ctor 0x361B30) -> mcPlayerFactory build 0x2CBC40 (in-race) / 0x2CBAE0 (frontend/garage).",
+    "evidence": "0x2BE180..0x2BE1D0: per slot esi -> push 0x2EC; call 0x1B3B90; push ...; call 0x2BFE50. 0x2C0005 mov ecx,[0x53F2E0]; 0x2C0037 imul edx,0x2C; 0x2C003A mov ecx,[edx+ecx+0x120] (slot CarCfg*); push ecx; push eax(slot); ... 0x2C0050 call 0x2CB270; 0x2C0059 call 0x2CBC40; 0x2C005E mov [esi+0x14],eax. 0x361B30 stores arg2 at [esi+0x54] (CarCfg*). 0x2CB270 sets [esi+0xE8]=slot, [esi+0xE1]=bool, vtable 0x476940; the string \"mcPlayerFactory::MakeFeedback\" follows the vtable at 0x476980.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "mcPlayerFactory::Build creates the visual customization (mcCarCustom) and applies the CarCfg",
+    "address": "0x2CBC40; mcCarCustom ctor 0xF4430 (object size 0x3138); mcCarCustom::ApplyCarCfg 0xF32A0 (CarCfg*, bool forceAll, int slot); model instance via [0x50A08C] -> 0x105B80 (frontend path 0x2CBAE0)",
+    "evidence": "0x2CBC46: lea edi,[esi+4]; call 0x26A6A0 (model idx from name). push 0x3138; call 0x1B3B90; push 0x448CF8 (\"default\"); push edi; call 0xF4430; mov [esi+0x50],eax. 0x2CBCA4: mov ecx,[esi+0x54] (CarCfg*); push [esi+0xE8]; push 1; push ecx; mov ecx,eax; call 0xF32A0. 0xF32A0: mov eax,0x3FFF if forceAll else [edi+8]; and eax,0x3F7F; reads cfg+0x18/0x19 (TireWidth) via 0x270C00, etc. 0xF4430 references \"mcCarCustom\", \"tune/vehicle/customdata/%s\", \"$/vehicle/shared_decals\".",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Network session object (System Link/online) and its message dispatcher",
+    "address": "session global [0x557EFC] (ctor 0x24300, size 0xC4, vtable 0x449100); dispatcher 0x1AF470 switches on msg[0]-0x40 via jump table 0x1AF6F4; Send = vtable+0x24 (msg, destMask, flags); [sess+0x10] = local slot, [sess+0x18] = host slot (GUESS on semantics)",
+    "evidence": "0x24331: mov dword ptr [esi],0x449100; 0x24348 mov [0x557EFC],eax. 0x1AF474: movzx edx, byte [eax]; add edx,-0x40; cmp edx,0x28; jmp [edx*4+0x1AF6F4]. Jump-table entry for 0x44 -> 0x1AF509: call [edx+0x1A0]. 0x25DC2..0x25DFE: if [esi+0x10]==[esi+0x18] and dest==1<<host -> call [edx+0x1A0] locally, else call [edx+0x24](msg,mask,0).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Net message 0x44 = CarCfg update (serialize = raw struct copy). Send function.",
+    "address": "SendCarCfg 0x25D20 = vtable 0x449100 slot +0x13C (0x44923C). Args: (CarCfg* src, slot (-1 = local [sess+0x10]), bool, byte flag, destMask (0xCAFEBABE = 1<<hostSlot)). Packet: [0]=0x44, [2]=u16 size 0x114, +0x08 CarCfg (0x108 bytes), +0x110 slot byte, +0x111 flag byte. Message ctor 0x24220.",
+    "evidence": "0x25D57: mov byte ptr [esp+0x0C],0x44; mov word ptr [esp+0x0E],8; call 0x271D20 (CarCfg at msg+8); mov word ptr [esp+0x12],0x114; mov [esp+0x120],bl (slot -> msg+0x110); call 0x272010 (copy src CarCfg); mov [esp+0x11D],cl (msg+0x111). 0x25D41: cmp edi,0xCAFEBABE; mov ecx,[esi+0x18]; shl edi,cl. Callers: lobby mcNetworkWaiting (ctor 0x15DDB0, CarCfg at +0x378) 0x15F832..0x15F844: push 0xCAFEBABE; push 0; push 1; push -1; lea eax,[esi+0x378]; call [edx+0x13C]; also 0x15E4C2.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Net message 0x44 receive (deserialize + store the remote player's CarCfg); the host relays it",
+    "address": "OnCarCfg 0x26370 = vtable 0x449100 slot +0x1A0 (0x4492A0). Stores into [[0x53F2E4] + msg.slot*0x2C + 0x120].",
+    "evidence": "0x263A6: cmp [esi+2],0x114 (size check). Host branch ([ebx+0x10]==[ebx+0x18]): 0x264B7 mov ecx,0x45; rep movsd (copy 0x114 bytes); mask = ~(1<<hostSlot); call [edx+0x24] (relay to all others). Common path 0x26507: movzx eax, byte [esi+0x110]; mov ecx,[0x53F2E4]; imul eax,0x2C; mov ecx,[eax+ecx+0x120]; lea edx,[esi+8]; push edx; call 0x272010. Rejection branch 0x263E9..0x26463 (when [[0x50F148]+0xC]+0x8C and 0x15B590() are true): sends the stored CarCfg back to the sender with msg+0x111=1 and does not overwrite.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Join/player-info message carries the joining player's CarCfg (base type 0x04, total 0x198 bytes, CarCfg at +0x88)",
+    "address": "message factory 0x1AF950 (ptr at 0x4490AC); base ctor 0x5C1D0 (type 0x04, name at +0x11, +0x84 flag); client fill 0x2EFF0 (ptr at 0x44A514); host handler 0x2EC80 (ptr at 0x44A4FC); +0x190 flags (from 0x2E970), +0x194 mask ([0x522BB8])",
+    "evidence": "0x1AF951: push 0x198; ... call 0x5C1D0; lea ecx,[esi+0x88]; call 0x271D20; mov word ptr [esi+2],0x198. 0x5C1D9: mov byte ptr [esi],0x04. 0x2F066: mov eax,[0x53F2E4]; mov ecx,[eax+0x120]; lea esi,[edi+0x88]; call 0x271E20 (local slot0 car -> msg); fragment 0x2F0AA: call 0x155920 (re-pick the career/arcade car). Host 0x2EE71: call 0x2132F0 (assign slot esi); 0x2EE7D imul eax,0x2C; mov ecx,[eax+edi+0x120] (edi=[0x53F2E4]); lea edx,[ebp+0x88]; push edx; call 0x272010; then call 0x2E8E0(slot, msg+0x190).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Single-player / career start puts the profile's current garage car into setup slot 0 (and slot 1 for 2-player split-screen)",
+    "address": "0x268D80 (callers 0x12440, 0x126C8, 0x33D6C0)",
+    "evidence": "0x268DE3: movzx edx, byte [0x53F80D]; imul edx,0x108; add edx,0x53F810; mov ecx,[[0x53F2E4]+0x120]; call 0x272010. If [[0x53F2E4]+0x50]>1, the same CarCfg is copied to [[0x53F2E4]+0x14C] (slot 1).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Hook points for co-op: inject the partner's own campaign CarCfg into a host race-setup slot before players are created",
+    "address": "write CarCfg to [[0x53F2E4] + n*0x2C + 0x120] before 0x268FF0 runs (or to [[0x53F2E0] + n*0x2C + 0x120] before 0x2BE100); the receive path 0x26370 / 0x2EC80 already does exactly this",
+    "evidence": "Data flow from the confirmed findings above: profile garage 0x53F810[0x53F80D] -> 0x155920 -> setup slot -> msg 0x04 (+0x88) / msg 0x44 (+0x08) -> peer stores into the 0x53F2E4 slot -> 0x268FF0 copies into 0x53F2E0 -> 0x2BE100/0x2BFE50 reads [0x53F2E0]+slot*0x2C+0x120 -> 0x2CBC40 -> 0xF4430/0xF32A0. Which slots 0x2BE100 treats as active (byte array built by 0x2BD810/0x2BDC00) was not traced.",
+    "status": "GUESS"
+   }
+  ],
+  "open_questions": [
+   "How does 0x2BE100 decide which of the 8 slots get a player? It reads an active-byte array filled by 0x2BD810/0x2BDC00, which was not traced. This matters for adding the partner as an extra human slot in a career race.",
+   "What exactly do race-setup entry fields +0x00, +0x10 (passed to the player ctor as arg3), +0x18 (!= -1, maybe AI/opponent id), +0x26 (0x13A byte) and the second 8-entry array at +0x274 mean?",
+   "Is the CarCfg alone enough to rebuild the physics car (engine, transmission and other levels from EngineState/TransState...)? The physics side of 0x2CBC40 (vtable calls +0x20, +0x04, +0x10 and 0x361B80) was not followed. The visual side is confirmed through 0xF32A0.",
+   "What are the 0x1BC-byte per-model unlock objects at profile+0xA6F0 (ctor 0x273100, bit set/test 0x273300/0x273360)? They are probably parts unlocks and are not needed to display a car.",
+   "How is the save copy (mcMemCard+0x14) synced with the live profile 0x53F308 on load and save?",
+   "What do join-message fields +0x08 (from 0x1AFBA0), +0x190 (0x2E970 flags) and +0x194 ([0x522BB8] mask) contain, and what do msg 0x44 +0x111 and the 0x15B590 rejection condition mean?",
+   "What does flag [0x50F130] mean? It forces 'stock model' car selection (0x53F2FC=1) in the garage menu 0x152420, probably arcade or network quick race. Co-op must make sure it is 0 on the partner side so the career garage car is sent."
+  ]
+ },
+ "find:save-progress": {
+  "summary": "I mapped how the career is saved and what a race win changes. Everything comes from static reading of the generated asm comments and default.xbe; nothing was run.\n\nGlobals:\n- [0x557F0C] = mcPgCareer*.\n- [mcPgCareer+0x0C] = career data object, the part that is serialised. It holds money at +0xACC, the current city at +0x50, the open-race list at +0xA58, the won/skipped counters at +0xA78/+0xA7A, and the 'Beaten' flags of hookmen at +0xAA0.\n- 0x53F308 = global profile/config block of 0x18340 bytes, copied whole into the save. It holds the garage: owned-car count is the byte at 0x53F80C (max 0x1E = 30), the selected car is the byte at 0x53F80D, and the car records start at 0x53F810 with a stride of 0x108.\n- [0x4CB690] = the mcMemCard singleton. Its state is at +4: 10 = save a new profile, 100 = save the current profile, 120 = save variant (GUESS), 130 = load, 140 = cancel. mcMemCard::Update is 0x1A9E0 and is pumped every frame from 0x1F9D0.\n\nThe game's own save flow: `ecx=[0x4CB690]; push 0,0,0,0,1; call 0x19360`. It only works if a profile is loaded (byte [memcard+0x334B4] != 0). On the next Update, 0x1A550 serialises the profile and the career into the memcard buffer and calls 0x22040, which writes save game \"Remix : <profile>\", file \"<profile>.mc3Remix\".\n\nRace end:\n- mcRaceStateDerived (vtable 0x4691B8) state 7 runs 0x1C2B00. It awards prize money (0x1CFC50: money += prize) and then calls 0x1D1810, which calls mcPgCareer::ReportRaceResult (0x277EE0) with result 0 = won, 1 = lost.\n- A win with career sub-state [pgCareer+0x24]==4 calls 0x277530. That moves the race out of OpenRaces (CloseRace 0x281130, which increments NumberOfWonRaces), can mark a hookman beaten (0x281370), updates the per-city beaten table and sets the dirty byte [pgCareer+0x20]=1.\n- Then race state 11 (0x1C33E0) autosaves through 0x19360 when the career dirty flag or the garage dirty flag (0x557648) is set.\n- Career credit and autosave are both skipped when [0x53F2D4] != 2 (not career mode) or when mcGameState ([0x557ED0]) +4 == 3. State 3 is very likely replay playback (GUESS).\n\nThe debug career log \"%sMC_Career_log_%s.txt\" is dead in this retail build. Two functions format it into a stack buffer with \"c:\\\\\" and the profile name, and the buffer is never used. Nothing logs to it, so progress has to be watched through the fields below.",
+  "findings": [
+   {
+    "what": "Pointer to the career manager mcPgCareer (global)",
+    "address": "0x00557F0C",
+    "evidence": "mcPgCareer::ReportRaceResult (0x277EE0, uses string 0x473C7C 'mcPgCareer::ReportRaceResult(): unsupported game state') is called as 'mov ecx,[0x00557F0C]; push esi; call 0x00277EE0' at 0x1D183C. Save 0x1A550: '0001A5D5 mov ecx,[0x00557F0C]; 0001A5DB call 0x00277250' (serialise). Load 0x19560: '000195EB mov ecx,[0x00557F0C] ... 000195F7 call 0x00277E20' (deserialise).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "mcPgCareer member layout",
+    "address": "mcPgCareer+0x0C/+0x10/+0x14/+0x20/+0x24/+0x28/+0x2C/+0x30/+0x56/+0x58/+0x5C/+0x60",
+    "evidence": "+0x0C = career data object (serialiser 0x27F740 and deserialiser 0x2829E0 are called with ecx=[esi+0x0C] in 0x277250/0x277E20). +0x10 = world object with sub-objects +0x20 (0x283CB0: 'NumCities','NumRacesBeaten','NumRacesOpen','COLastRace'), +0x24 (0x28CE20: 'LastPlayerVehicle','LastPlayerPerformanceModValue') and +0x28 (0x291DE0: 'TimeOfDay','Weather'). +0x14 = prize calculator ('001CFC8C mov esi,[eax+0x14]'; 0x2840E0 returns [ecx+0xBC]). +0x20 = dirty byte ('00277F8C mov byte ptr [esi+0x20],1' on a win; cleared after a save at '0001A62D mov byte ptr [eax+0x20],0'). +0x24 = career sub-state (a win only counts when it is 4: '00277EFB cmp ebx,4'). +0x28 = last result ('00277F03 mov [esi+0x28],edi'). +0x2C = next state (0/4 -> 3; 1,2,3 -> 4; 5 -> 1; 6 -> 7). +0x58/+0x5C/+0x60 = completion floats; the +0x60 value is saved as a byte at memcard+0x18354 ('0001A5A9 fld [eax+0x60]').",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Career data object (the serialised career) and its fields",
+    "address": "[[0x557F0C]+0x0C] + offsets",
+    "evidence": "The deserialiser 0x2829E0 names each field with a string: +0x50 CurrentCareerCity (0x2829F7 lea eax,[esi+0x50], 'CurrentCareerCity'); +0x54 CurrentStrictlyCareerCity; +0xA58 OpenRaces vector (begin +0xA5C, end +0xA60, element 0x4C); +0xA68 PutAsideRaces vector (element 0x50); +0x55C HistoricRaces ring (30 x 0x20, count at +0x924); +0x928 PreviousRacesCareer ring (30 dwords, head +0x9A0, count +0x9A8); +0x9AC PreviousRacesTokyo ring (40); +0xA90 OpenHookmen vector (element 0x10); +0xAA0 Beaten[] bytes, one per hookman ('00282F3D lea eax,[esi+ebx+0xAA0]', 'Beaten'); +0xAC9 CurrentCareerOrder; +0xA78 NumberOfWonRaces; +0xA7A NumberOfSkippedRaces; +0xA7C NumFillerRacesWon[4]; +0xB14 Seed; +0xB18 UniqueRaceIdCounter; +0xACC Money ('0028301C lea eax,[esi+0xACC]' + 'Money'); +0xCBE AnnounceRace; +0xCBF AutoXTutorialPlayed; +0xCC0 TournamentTutorialPlayed; +0xAD4 Stats vector; +0xAE4 Collects[12]; +0xB1A CarConfig names (0x23 bytes each); +0x20..+0x30 CruiseStartData (free-roam start position); +0x10 = task/flow controller (0x27C460: 'CareerIntro','OrderedTutorial','NumRunningTasks').",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Career money field",
+    "address": "[[0x557F0C]+0x0C]+0xACC (int32)",
+    "evidence": "Prize award in 0x1CFC50: '001CFC87 mov eax,[0x00557F0C]; 001CFC8F mov ebx,[eax+0x0C]; ... 001CFCC9 call 0x002840E0; 001CFCCE mov edx,[ebx+0xACC]; 001CFCD5 add edx,eax; 001CFCD7 mov [ebx+0xACC],edx'. Shop/garage: '00142C31 mov edx,[0x00557F0C]; 00142C37 mov eax,[edx+0x0C]; 00142C3A mov edx,[eax+0xACC]; 00142C43 add edx,ecx; 00142C45 mov [eax+0xACC],edx'.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Open-race entry layout and lookup by unique race id",
+    "address": "OpenRaces element (0x4C bytes); lookup 0x27EFF0 / 0x27EAC0; index-to-pointer 0x27F010",
+    "evidence": "0x27EAC0 compares the u16 at entry+0x04 against the race id ('0027EAEF mov si,[esp+0xC]; 0027EAF4 cmp si,[edx]; add edx,0x4C') and returns -1 when not found. 0x27F010: 'mov edx,[ecx+0xA5C]; imul eax,eax,0x4C; add eax,edx'. 0x277530 reads entry+0x08 (city, s8), +0x09 (hookman index, -1 = none) and +0x0A (class/group). The current race id is the u16 at careerData+0x58 ('0027753B mov ax,[esi+0x58]'); that this field means 'current race' is a GUESS.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "mcPgCareer::ReportRaceResult(int result): result 0 = won, 1 = lost, 2/3/4 = other quits, 5 = quit to front end/cruise, 6 = end of race (choose garage)",
+    "address": "0x00277EE0",
+    "evidence": "String 0x473CB8 'mcPgCareer::ReportRaceResult(): race result (%d) not supported...'. Guard '00277EE0 mov eax,[0x0053F2D4]; cmp eax,2; jnz exit' (career mode only). Win path: '00277F58 test edi,edi; jz 0x277F71' -> '00277F74 mov [esi+0x2C],3; 00277F81 call 0x276F20 (city); 00277F86 mov word ptr [esi+0x34],0; 00277F8C mov byte ptr [esi+0x20],1'; then if [esi+0x56]==0, state==4 and result==0: '00277FE1 call 0x00277530' (apply the win) and '00277FE9 call 0x002893C0'; then the completion percentages are recalculated. Callers push: 0x1D1843 (computed result), 0x16A36D (4), 0x16A734 (3), 0x18B8D3 (2), 0x162269/0x16A961 (5), 0x18C5DC (6). Win/loss mapping in 0x1C2B00: '001C2B44 mov cl,[eax+esi+0xF5]; test cl,cl; setz dl; push edx; call 0x1D1810' (racer flag 0xF5 set -> 0 = won).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Apply race win to the career data: close the race, increment the win counter, mark a hookman beaten, update the per-city beaten table",
+    "address": "0x00277530 (calls CloseRace 0x281130 via 0x281E40, BeatHookman 0x281370, 0x283970)",
+    "evidence": "0x277530: race index = 0x27EFF0([careerData+0x58]); if entry+0x09 != -1, increments the hookman progress byte and, when it reaches the value in the [0x557EE4] table, calls '002775B0 call 0x00281370' (BeatHookman: '002813C7 mov byte ptr [ecx],1' then removes the entry from +0xA90). If entry+0x0A >= 0: '002775CA call 0x00283970' on [[pgCareer+0x10]+0x20], which increments the per-city/class beaten counter. Then '002775F7 call 0x00281E40' -> 0x281130(idx, won=1, open=1): pushes the race into the Historic and Previous rings, removes it (0x281080) and runs '00281338 inc [esi+0xA78]' (NumberOfWonRaces); the skipped path is 'inc [esi+0xA7A]'. Note that 0x277530 does not check for index -1, so the race must exist in this machine's OpenRaces list.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Prize money award at end of race (runs before ReportRaceResult)",
+    "address": "0x001CFC50 (race object method; called from race state 7 = 0x1C2B00)",
+    "evidence": "Guards: '001CFC56 mov al,[edi+0x0E]; jnz exit' (only once per race), '001CFC61 cmp [0x0053F2D4],2', '001CFC73 cmp dword ptr [eax+4],3; jz exit' where eax = [0x557ED0]. Finishing position from '001CFC9D mov ebp,[eax+edi+0xAC]' (racer entry stride 0xB8). Prize = 0x2840E0 on [pgCareer+0x14], added to careerData+0xACC; ends with '001CFCFD mov byte ptr [edi+0xE],1'. Called at '001C2B34 call 0x001CFC50' inside 0x1C2B00.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Race end sequence in mcRaceStateDerived (vtable 0x4691B8; SetState = vtbl+0x18 = 0x1C3B70; RequestState = vtbl+4 = 0x1C22D0; Update = 0x1C3610): state 7 = report the result, state 11 = autosave",
+    "address": "0x001C3B70 (SetState jump table at 0x1C3C28); 0x001C2B00; 0x001C33E0",
+    "evidence": "SetState table at 0x1C3C28: entry 7 -> 0x1C3BCD 'call 0x001C2B00'; entry 11 -> 0x1C3BD6 'call 0x001C33E0'. The constructor 0x1C3C60 stores 'mov dword ptr [esi],0x4691B8'. In Update state 7 (0x1C37B9): '001C3837 call 0x001C2010' (true when the race type [[0x53F2E0]+0x18] is 0..2), then '001C3848 push 0x0B; call [eax+4]', which requests the autosave state. The request goes through [0x557EEC]; that this global is the race-state object is a GUESS.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Post-race autosave: checks the dirty flags and requests a memcard save",
+    "address": "0x001C33E0",
+    "evidence": "Conditions: '001C33F7 cmp [edx+0x50],1; jnle skip' (edx = [0x53F2E0], probably the number of local players); '001C3406 cmp dword ptr [eax+4],3; jz skip' (eax = [0x557ED0]); '001C3432 cmp [ecx+0x334B4],bl' (a profile is loaded). Then '001C3479 call 0x000197F0' (dirty check: '000197F0 mov al,[0x00557648] ... mov cl,[eax+0x20]' with eax = [0x557F0C]), then '001C349E push 1; call 0x00019360' (request save) and '001C34C3 jmp 0x00154A20' (shows the saving UI via [0x50F148]). Another branch calls 0x19630 (state 120) when [[0x557EFC]+0x10] >= 0 and [[0x53F2E0]+0x48] != 0.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "mcMemCard singleton pointer and the Update state machine",
+    "address": "global 0x004CB690; Update 0x0001A9E0",
+    "evidence": "String 0x448440 'mcMemCard::Update(): unsupported state: %d' is used in 0x1A9E0. Main loop '0001FA29 mov ecx,[0x004CB690]; 0001FA2F call 0x0001A9E0' runs every frame. The state at +4 dispatches through byte table 0x1AABC / jump table 0x1AAA0: 10 -> 0x1A680 (save as a new profile, checks for a duplicate name in the list at +0x33504), 100 -> 0x1A550 (save the current profile), 120 -> 0x19660, 130 -> 0x19730 (read save), 140 -> cancel. When done: '0001AA83 mov [esi+8],edx' (result: 0 = ok, 3/6 = error); '0001AA86 mov byte ptr [esi+0xC],1' (done flag); optional callback '[esi+0x334F8](ctx [esi+0x334F4])'. Saves stay in state 100/120 until a minimum display timer expires ('0001A63F call 0x20E150; sub eax,[esi+0x33558] ... mov [esi+4],0').",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "How to trigger the game's own save flow (request functions)",
+    "address": "RequestSave 0x00019360 (state 100); 0x00019630 (state 120); 0x000197E0 (state 10, new profile); 0x00019720 (state 130, load); 0x000197B0 (state 140); IsDirty 0x000197F0",
+    "evidence": "'00019360 ... call 0x20E150; mov [esi+0x33558],eax; mov byte ptr [esi+0x3355C],0; 00019375 mov dword ptr [esi+4],0x64; mov al,1; ret 0x14' (the 5 stack arguments are not read). Every caller uses 'mov ecx,[0x004CB690]; push 0;push 0;push 0;push 0;push 1; call 0x00019360': garage/shop at 0x143141, in-race at 0x1C34A0, front-end memcard at 0x33FBA1. Each caller first checks 'cmp byte ptr [ecx+0x334B4],0' (profile name loaded). Completion is observed through mcMemCard+0xC==1 and +4==0; 0x1AB50 polls it and clears the flag.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Save serialisation into the mcMemCard buffer (state 100 handler)",
+    "address": "0x0001A550",
+    "evidence": "'0001A58F or eax,0x3484D; 0001A59C mov [esi+0x10],eax' (signature built from a checksum of [0x557EE4] data). '0001A594 push 0x53F308; lea ecx,[esi+0x14]; call 0x26BD10' (memcpy of 0x60D0 dwords = 0x18340 bytes: '0026BD18 mov ecx,0x60D0; rep movsd'). '0001A5B1 mov [esi+0x18354],al' (completion byte from career +0x60). '0001A5CE mov [esi+0x18355],al' (career->[+0xC]->[+0x50], the city). '0001A5C3 push 0x61A8; lea ecx,[esi+0x18358]; mov ecx,[0x557F0C]; call 0x277250' (career blob, max 25000 bytes). Then '0001A607 call 0x00022040' with the profile name from +0x334B4, then '0001A62D mov byte ptr [eax+0x20],0' (clears the career dirty flag).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "mcMemCard object layout",
+    "address": "[0x4CB690] + offsets",
+    "evidence": "+0x04 state; +0x08 result; +0x0C done flag; +0x10 signature; +0x14..+0x18354 copy of the 0x53F308 profile (0x18340 bytes); +0x18354 completion %; +0x18355 city; +0x18358 career blob (0x61A8); +0x2FC profile name being created; +0x334B4 current profile name (0x40 chars, set by sprintf '%s' at 0x1ABF6/0x1A7B0); +0x334F4/+0x334F8 callback context/function; +0x334FC storage device object (methods 0x22040 write, 0x22310 read, 0x22220 enumerate); +0x33504 save list array (stride 0x64: name at +0x40, timestamp at +0x50..+0x56, valid flag at +0x60, +0x58 dword copied to [[0x53F2E4]]); +0x3350C list count; +0x33558 request time; +0x3355C 'write done' flag.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Save file names: XSaveGame 'Remix : <profile>', file '<profile>.mc3Remix' (.mc3 / 'mc3' variant when byte flag 0x4CB694 is set)",
+    "address": "0x00022040 (write), 0x00022310 (read), 0x0002AA20 (create save game via 0x324A2B)",
+    "evidence": "0x22040 uses strings 0x448434 'Remix : %s', 0x448F14 '%s.mc3Remix' and 0x448F20 'Remix : '. 0x22310 picks 'mov eax,0x448F40' ('mc3') or 0x448F34 ('mc3Remix') depending on its 4th argument. 0x2AA20 builds the drive root '<letter>:\\' ('mov byte ptr [esp+0x25],0x3A; [esp+0x26],0x5C') and calls 0x324A2B. 0x324A2B references 0x4A1554 '\\SaveMeta.xbx', so it is the XAPI XCreateSaveGame (the XAPI name is a GUESS; the strings are confirmed). File body is written by 0x193F0, called at '00022183 call 0x000193F0': [+0x10] 4 bytes, [+0x14] 0x18340 bytes, [+0x18354] 1, [+0x18355] 1, [+0x18358] 0x61A8, then the globals 0x50A1C0 (1), 0x50A1C2 (2), 0x50A1C4 (1), 0x50A1C6 (0x4074), with a running checksum (0x2733E0).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Load and boot autoload",
+    "address": "0x0001AB90 (boot: enumerate saves, pick the newest, load), 0x00019560 (read and apply a profile), 0x00019730 (state 130 read)",
+    "evidence": "Boot '00012878 mov ecx,[0x004CB690]; push 1; push 0; call 0x0001AB90'. 0x1AB90 calls 0x19C80 (enumerate saves), pumps 0x1A9E0 until done, uses 0x1A820 (newest by timestamp) and copies that name to +0x334B4, then '0001AC24 call 0x00019560'. 0x19560: '00019599 call 0x00022310' (read), '000195CB call 0x0026BD10' (buffer +0x14 -> 0x53F308), '000195D7 call 0x0026BC60', '000195F7 call 0x00277E20' (career deserialise from +0x18358, size 0x61A8), '00019601 call 0x0026CBB0' (garage validation). mcFeMemCard also calls it at '00340049 call 0x00019560' with its mcMemCard* at [this+0x80].",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Global profile/garage block (saved whole): owned-car count, selected car, car records",
+    "address": "0x0053F308 (size 0x18340 saved); count byte 0x0053F80C (=+0x504); selected byte 0x0053F80D (=+0x505); cars at 0x0053F810 + i*0x108",
+    "evidence": "Purchase limit '0014DD1E cmp byte ptr [0x0053F80C],0x1E' leads to string 0x45B128 'ID_Error_Too_Many_Owned'. Selected car '00155944 movzx esi,byte ptr [0x0053F80D]; 0015594B imul esi,esi,0x108; 00155951 add esi,0x53F810' (same pattern at 0x18FC03 and 0x14310E). 0x26CBB0 walks the entries with 'imul eax,eax,0x108' and the strings at entry+0xE3/+0xF9. Garage changes set the profile dirty byte '00143120 mov byte ptr [0x00557648],1'.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Race result reporter on the race object; skips career credit when game state == 3 (replay)",
+    "address": "0x001D1810",
+    "evidence": "'001D1810 mov eax,[0x00557ED0]; 001D1818 cmp dword ptr [eax+4],3; jz exit'; '001D181E cmp dword ptr [0x0053F2D4],2' (career); '001D1843 call 0x00277EE0'; then '001D184B call 0x001CFD10' (post-race stats); if not yet reported, '001D185E mov byte ptr [ecx+0x20],1' (career dirty); '001D1862 mov byte ptr [edi+0xD],1'. mcGameState::EnterState is at 0x21D30 (string 0x448EDC 'mcGameState::EnterState - invalid State', '00021D52 mov [esi+4],edi'). State 3 (0x212E0) and race-end mode 3 call [0x4CBAE0] methods; 0x23C80 refers to 'EndReplay'. So state 3 is replay (GUESS, strong).",
+    "status": "GUESS"
+   },
+   {
+    "what": "Debug career log '%sMC_Career_log_%s.txt' is dead code in retail",
+    "address": "string 0x004483EC; used in 0x00019560 and 0x0001A680",
+    "evidence": "'000195A2 lea ecx,[esi+0x2FC]; push ecx; push 0x448404 (\"c:\\\\\"); push 0x4483EC; lea edx,[esp+0x50]; push 0x64; push edx; call 0x0020CF50' (snprintf into a stack buffer). Nothing reads that buffer afterwards in either function (the same pattern is at 0x1A75A..0x1A772). No file open or write uses it, so nothing is logged. To watch progress, read careerData +0xACC (money), +0xA78 (wins), the OpenRaces count ((+0xA60 - +0xA5C) / 0x4C), +0xAA0[] (hookmen beaten) and +0x50 (city) instead.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Career-mode flag and race-config pointer used by the save and credit guards",
+    "address": "0x0053F2D4 (game type; 2 = career), 0x0053F2E0 (pointer to the current race config)",
+    "evidence": "'00277EE0 mov eax,[0x0053F2D4]; cmp eax,2'; '0014305F mov [0x0053F2D4],eax' with eax=2. Race config: [0x53F2E0]+0x18 = race type (0x1C2010 accepts 0..2 for autosave); +0x48 is checked in 0x1C33E0 and 0x212E0; +0x50 must be <= 1 for autosave. The meanings of +0x48 and +0x50 are GUESSES (possibly 'online/LAN race' and 'number of local players').",
+    "status": "CONFIRMED"
+   }
+  ],
+  "open_questions": [
+   "Crediting the partner's career for a race won in the host's world: 0x277530 looks up the current race id (careerData+0x58) in the partner's own OpenRaces list and does not check for -1. Before reporting result 0 on the partner's machine, the same race (unique id at entry+0x04) must exist there. Otherwise it should be faked another way, for example by adding money and NumberOfWonRaces directly, or by calling CloseRace 0x281130 with the partner's own matching race index. Who writes careerData+0x58 (the current race id) when a career race starts is not yet mapped.",
+   "Race ids come from UniqueRaceIdCounter (+0xB18) and a Seed (+0xB14), so two careers will normally have different open-race lists and ids. A mapping by city + race definition (entry+0x08/+0x0A/+0x25) may be needed instead of by id.",
+   "What [[0x53F2E0]+0x48] means (it chooses between save path state 100 and state 120 in 0x1C33E0 and changes the 0x212E0 setup), and what mcMemCard state 120 (0x19660, loops on 0x22220 then writes) does exactly.",
+   "[mcPgCareer+0x56] blocks applying the win when it is non-zero. Its setter and meaning are unknown (maybe a tournament or special-event flag).",
+   "Whether mcGameState ([0x557ED0]+4) == 3 is really replay and not a network-race mode. If online races use another mode, check that ReportRaceResult and the autosave are not suppressed in the co-op path ([0x53F2D4] must remain 2).",
+   "The full meaning of the 0x108-byte owned-car record at 0x53F810 (model, parts, paint, vinyls) was not decoded here. That belongs to the car-config area; only its location, count and selected index are confirmed.",
+   "0x1AB90 boot-autoload argument semantics (push 1; push 0) and the 0x4CB694 flag (.mc3 legacy import vs .mc3Remix) are not fully confirmed."
+  ]
+ },
+ "find:race-career": {
+  "summary": "I mapped the career race flow statically, from opening a race in cruise through the race state machine and checkpoints to applying the result to the career.\n\nKey objects:\n- Global 0x557F0C is the mcPgCareer object (ctor 0x278160, vtable 0x473B98). Its fields: +0x0C careerData (0xCC8 bytes), +0x10 unlock/progression manager, +0x14 rewards.\n- 0x557EEC is the mcRaceStateDerived state machine (vtable 0x4691B8).\n- [0x533E24]+4 is the current race object (mcRaceBase family; base vtable 0x46A010).\n- 0x53F2E4 and 0x53F2E0 are the 0x3E0-byte next and current game-setup structs.\n- 0x557EE4 is the static per-city race database.\n\nStarting a race: in cruise, the hookman logic (0x1D8F20) finds the player inside an open race's start marker and calls mcPgCareer::StartRace(u16 UniqueId) at 0x277990. SetupNextCareerRace (0x278270), state 4, then calls the race-setup function 0x277AE0(UniqueId). That function looks up the open-race record, sets careerData+0x58 = current race id, and fills the next setup via 0x26B8E0(City, RaceIdx). Progress (0x2779D0) then commits the state and switches the game state machine (8, then 6) so the race loads.\n\nRace states (EnterState 0x1C3B70, jump table 0x1C3C28):\n- 2: intro\n- 4: countdown\n- 5: GO\n- 7: finished\n- 12: race over\n\nOn entering state 7 (0x1C2B00) the game does three things in order:\n1. Awards money once, based on finishing position (0x1CFC50).\n2. Computes result = localRacer.won ? 0 : 1.\n3. Calls 0x1D1810(result), which in career mode calls mcPgCareer::ReportRaceResult(result) at 0x277EE0.\n\nResult codes: 0 won, 1 lost, 2 changed vehicle, 3 restart, 4 quit to cruise, 5 quit to front end, 6 end of race to garage.\n\nOn a win, with career state 4 and no tournament flag, ReportRaceResult calls 0x277530. That function:\n- erases the race from the open-race list and adds it to history;\n- increments NumberOfWonRaces;\n- advances the hookman counter (which can mark the hookman as beaten);\n- applies the side-quest or filler reward.\nIt then runs the unlock evaluation 0x2893C0.\n\nThe race UniqueId is a per-save counter (careerData+0xB18 \"UniqueRaceIdCounter\"), so it is NOT stable between two copies. A stable cross-copy key is (City, RaceIdx), i.e. record bytes +0x08 and +0x06. The setup race-name string (setup+0x68) also works, and the existing online code already uses it to tell \"next race\" from \"restart\".\n\nTo force or credit a win:\n- Set the local racer-info +0x5D (won) to 1 before race state 7 is entered (or push 0 at 0x1C2B52), or\n- Call ReportRaceResult(0) while career state is 4 and careerData+0x58 holds the race's local UniqueId.\n\nThe race must exist in the local open list: 0x277530 does not check for index -1.",
+  "findings": [
+   {
+    "what": "mcPgCareer::ReportRaceResult(int result), thiscall, ecx = mcPgCareer (global 0x557F0C)",
+    "address": "0x00277EE0",
+    "evidence": "Assert strings 0x473C7C/0x473CB8 'mcPgCareer::ReportRaceResult()...' are referenced only here. 277EE0 mov eax,[0x53F2D4]; 277EE8 cmp eax,2; 277EEE jnz exit (career-mode gate). 277EF8 mov ebx,[esi+0x24] (current career state); 277EFF mov edi,[esp+0x2C]; 277F03 mov [esi+0x28],edi (last result). 277F25 cmp edi,5 -> [esi+0x2C]=1; 277F36 cmp edi,6 -> [esi+0x2C]=7; if state==4: result 1/2/3 -> [esi+0x2C]=4 + 0x276F50(word data+0x58) (retry same race); result 0 or 4 -> [esi+0x2C]=3 (cruise). 277FCB mov al,[esi+0x56]; test; jnz skip; 277FD2 cmp [esi+0x24],4; 277FD8 [esi+0x28]==0 -> 277FE1 call 0x277530 (win credit); 277FE9 call 0x2893C0 on [esi+0x10] (unlock evaluation). 278001 call 0x2919E0 sets [[[esi+0x10]+0x28]+0x5E]=1. Stats 'k%AG/k%AF/k%AE' come from floats +0x58/+0x5C/+0x60, then 0x277930 (kCAR) and 0x277140 (kSKL). ret 4 = one argument.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Race result codes passed to ReportRaceResult",
+    "address": "0x00277EE0 (callers 0x1C2B55 via 0x1D1810, 0x16A8D7, 0x16A369, 0x162267, 0x18B8CF, 0x18C5DA)",
+    "evidence": "0 = won: only 0 reaches 0x277530 (277FD8 test [esi+0x28]); 0x1CFD86 result 0 -> stat 'kWIN'. 1 = lost: 0x1C2B4D setz on racer won flag gives 1 when not won; 0x1CFD95 result 1 -> 'k2ND'/'k3RD' by position. 2 = changed vehicle: 0x18B8CF push 2 after reloading player cars from garage arrays 0x53F810/0x541700; mcTkTournament assert 0x4701A8 'Changed Vehicle?' is handler index 2 in table 0x264E84. 3 = restart: 0x16A8D7 push 3 with 'Racers before race restart (DoResetRace)'. 4 = quit to cruise: 0x16A369 push 4 'DoQuitToCruise'. 5 = quit to front end: 0x162267 push 5 'Racers before exiting to Front End'. 6 = end of race to garage: 0x18C5DA push 6 'Racers at end of race (ChooseGarage)'.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Win-credit core: applies a won career race (erase from open list, counters, hookman/side-quest rewards)",
+    "address": "0x00277530 (thiscall mcPgCareer, no args)",
+    "evidence": "277536 mov esi,[ecx+0x0C] (careerData); 27753B mov ax,[esi+0x58] (current race UniqueId); 277547 call 0x27EFF0 (find index in open list +0xA58, -1 if absent: NOT checked); 277553 call 0x27F010 -> rec = [data+0xA5C]+idx*0x4C. 27755A rec+0x09 HookmanIdx: 277573 call 0x280900(city,hookman) -> 0x27F0F0 group; 27759E inc byte [group+0x0C]; compared with table [0x557EE4]+city*0x50+0x34 [hookman*12]; if equal -> 0x281370 (stat 'kHOK', hookman beaten). 2775B5 rec+0x0A SideQuestIdx>=0 -> 0x283970 on [[career+0x10]+0x20]; else if 0x27D170 (no hookman, no sidequest, TaskType 0) -> 0x28C790 on [[career+0x10]+0x24]. 2775F7 call 0x281E40(idx) -> 0x281130(idx,won=1,openList=1): history ring at +0x55C, 0x281080 -> 0x280DA0 vector erase of the open record, 281338 inc word [data+0xA78] (NumberOfWonRaces); the not-won path is 281350 inc [data+0xA7A] (NumberOfSkippedRaces).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Career unlock evaluation after a win (mcPgUnlockingRulesEval-driven)",
+    "address": "0x002893C0 (thiscall [mcPgCareer+0x10])",
+    "evidence": "2893C3 call 0x288640 (re-opens put-aside races when NumberOfWonRaces [data+0xA78] reaches a threshold: 2886A0 movzx ecx,word [edi+0xA78]; cmp; 0x281E80); 2893CA call 0x289260 (CurrentCareerOrder [data+0xAC9] tier advance -> 0x27DBE0); jmp 0x288DF0: loop i=0..3, 288E07 call 0x289CE0(i) (= 0x292CD0 rule check type 5) -> 0x288A00 unlock, 0x283F30, 0x28CFF0; then 0x288AB0(city [data+0x50]) and rewards 0x286350. Rules text parser asserts: 0x28B510 'ConvertRuleIdsFromASCIIToNumerical', 0x28B850 'BuildCondition'. All unlock state lives in careerData, so running ReportRaceResult(0) locally gives full unlocks.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "mcPgCareer object layout",
+    "address": "global 0x557F0C; ctor 0x00278160; vtable 0x473B98",
+    "evidence": "27816E mov [esi],0x473B98; 2781A5 mov [0x557F0C],esi; 2781CD alloc 0xCC8 + ctor 0x2834C0 -> [esi+0x0C] careerData; alloc 0xA8 ctor 0x289AB0(data) -> [esi+0x10] unlock/progression manager; alloc 0x17C ctor 0x287E00(data) -> [esi+0x14] rewards; 0x4C ctor 0x28FB20 -> +0x18. Fields: +0x20 dirty/save flag (277F8C, 2779A8); +0x24 current career state (committed in Progress 2779DC); +0x28 last result (-1 init); +0x2C next state (0 none; 1 FrontEnd, 3 Cruise, 4 Race, 5 named event, 7 Garage); +0x30 city (0x0D = none); +0x34 word next race UniqueId; +0x36 char[0x20] event name; +0x56 tournament flag (setter 0x276EE0, called by tournament 0x264730) that skips the normal credit; +0x57 suppresses setup.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "careerData (0xCC8 bytes, [mcPgCareer+0x0C]) fields named by its serializer",
+    "address": "serializer 0x002829E0..0x283200; record serializer 0x0027D350",
+    "evidence": "0x2829F1 'CurrentCareerCity' -> +0x50; 0x282A1E 'CurrentStrictlyCareerCity' -> +0x54; +0x58 word current race UniqueId (set by 0x2806F0, read 0x27F030); 'NumOpenRaces' -> vector +0xA58 (begin +0xA5C, end +0xA60), records 0x4C bytes, vtable 0x473E74; 'NumPutAsideRaces' -> vector +0xA68 (0x50 each); 'NumHistoricRaces' -> ring +0x55C; 282F7B 'NumberOfWonRaces' +0xA78 (u16); 282F92 'NumberOfSkippedRaces' +0xA7A; 'NumFillerRacesWon' +0xA7C[4]; 'Beaten' +0xAA0[]; 282F64 'CurrentCareerOrder' +0xAC9; 283005 'UniqueRaceIdCounter' +0xB18; 28301C 'Money' +0xACC (displayed with '$%d.00' at 0x148A7D); 'Seed' +0xB14; 'AnnounceRace' +0xCBE.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Open-race record (0x4C bytes) layout and the stable cross-copy race key",
+    "address": "careerData+0xA5C array; ctor 0x0027D0A0; serializer 0x0027D350",
+    "evidence": "27D35B 'UniqueId' -> +0x04 (u16; per-save counter careerData+0xB18, so NOT stable across copies); 27D374 'City' -> +0x08 (s8); 27D388 'RaceIdx' -> +0x06 (u16, index into static race DB [0x557EE4]+City*0x50: +0x18 name table, +0x20 def table 0x30 each, see 0x26B957..0x26B97B); 'HookmanIdx' +0x09; 'SideQuestIdx' +0x0A; 'TargetRetryScore' +0x0C; 'RetryScore' +0x10; 'Difficulty' +0x14; 'DefaultDifficulty' +0x18; 0x27D5AA 'CruiseRaceName' +0x1C; 'TaskTypeName' +0x1E; +0x28 float prize money (285B8D movss xmm0,[rec+0x28] -> 0x285B20). Lookup by id: 0x27EFF0(id) does a linear search comparing word +0x04 (0x27EAF4) and returns -1 if absent. Stable key for the network: (City, RaceIdx); setup+0x68 race name is also usable (the existing online code compares it at 0x25F2E..0x25F6F for host_selected_next_race vs restart).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Start a specific career race by UniqueId (what the cruise hookman calls)",
+    "address": "0x00277990 StartRace(u16 id); 0x00277AE0 SetupCareerRace(u16 id); 0x00278270 SetupNextCareerRace; 0x002779D0 Progress(bool)",
+    "evidence": "1D916F mov cx,[rec+0x04]; 1D9174 mov ecx,[0x557F0C]; 1D917A call 0x277990 (after 'Prepare_To_Race'). 277999 [esi+0x2C]=4; 2779A0 call 0x276F50 (+0x34=id, +0x30=city); 2779A8 [esi+0x20]=1. 278270: jump table 0x278360 case 4 -> 2782E1 call 0x277AE0(word [esi+0x34]). 277AE0: 0x27EFF0/0x27F010 record; 277B4E call 0x2806F0(id) (data+0x58=id, data+0x50=city); 277B8D call 0x26B8E0(City=rec+0x08, RaceIdx=rec+0x06) on [0x53F2E4] (next setup: +0x00 city, +0x68 name copied from DB, +0x18 race type); 277BD3 0x28D580(rec,setup) configures opponents. Progress 0x2779D0: [+0x24]=[+0x2C]; state 4 -> game state machine [0x557ED0] EnterState 8 then 6 (277A48..277A5F). mcTkCareerStart::SetupNextCareerEvent (0x268760) uses the same 0x277AE0 path (26883D).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Race state machine mcRaceStateDerived (global 0x557EEC): EnterState / Update and state numbering",
+    "address": "vtable 0x4691B8 (ctor 0x1C3C60, stored at 0x1C3CEA); vtbl+4 0x1C22D0 (guard) -> vtbl+0x18 0x1C3B70 EnterState; vtbl+8 0x1C3610 Update",
+    "evidence": "1C3B94 mov [esi+0x48],edi; jump table 0x1C3C28: 1 0x1C2320, 2 0x1C2EF0 (intro), 3 0x1C2350, 4 0x1C3290 (countdown, sounds 0x0B/0x0C), 5 0x1C2800 (GO: enables racer input), 6 none, 7 0x1C2B00 (FINISHED: pays money and reports the result), 8 0x1C33E0, 9 none, 10 0x1C34F0, 11 0x1C3580, 12 0x1C2BC0 ('Race Over'), 13 0x1C2C40; 1C3C0E [esi+0x04]=current state. Update table 0x1C3B1C; state 12 update (1C3AC6..1C3AD6) calls mcPgCareer 0x278270 + 0x2779D0(0) to leave the race. Update state 11 (1C38B1) reports result 5 (quit) offline. The assert text 'mcRaceStateDerived::EnterState - invalid State' (0x469200) sits inside Update.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Race-finished handler: computes win/lose and reports to the career",
+    "address": "0x001C2B00 (race state 7 enter); wrapper 0x001D1810 (mcRaceBase, arg result)",
+    "evidence": "1C2B1E esi=[[0x533E24]+4] (race); 1C2B34 call 0x1CFC50 (money, once per race); 1C2B39 call 0x2694D0 (local player idx = setup+0x3D8 if networked [setup+0x108], else 0); 1C2B3E imul eax,0xB8; 1C2B44 mov cl,[eax+esi+0xF5] (racerInfo.won); 1C2B4F setz dl -> result 0 if won else 1; 1C2B55 call 0x1D1810. 0x1D1810: 1D181E career gate [0x53F2D4]==2; if [race+0x0D] (already reported) set, results 0/1 are ignored; 1D1843 call 0x277EE0; 1D184B call 0x1CFD10 (stats kWIN/k2ND/k3RD/kTRS); 1D1862 [race+0x0D]=1.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Racer info entry (0xB8 bytes) and race object fields",
+    "address": "race+0x98+i*0xB8 (pointer array race+0x65C; vtbl+0x54 GetRacerInfo 0x1C3E80; vtbl+0x58 NumRacers 0x1D0B20 = [[0x558838]+0x28]); ctor 0x1D2070 (vtable 0x469D14)",
+    "evidence": "1C3E80 mov eax,[ecx+0x65C]; mov eax,[eax+ecx*4]. Entry fields: +0x04 finished (1E0752 mov [edi+0x9C],1); +0x05 arrested ('hud_arrested' 1E095F); +0x06 eliminated/DNF; +0x07 active; +0x10 finish time (1E16A1 from [0x557EEC]+0x0C); +0x14 finishing position, 1-based (1E09B5 'rw_1_pl' when 1; computed by 0x1CF440: base 1, inc per racer with higher +0x44 progress, 10 for DNF at 1CF4F9); +0x34 word next checkpoint (-1 init 1D20FC; read 1C7832); +0x48 checkpoints passed, +0x4C bitmask (1D9232/1D9235); +0x5D WON flag (set on rank-0 insertion 164B72/164BA4; cleared 1E16B5). Race: +0x0D result-reported flag, +0x0E money-awarded flag (1CFCFD), +0x10 race type, +0x24 numCheckpoints, +0x28 checkpoint array.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Checkpoints: loading layout and crossing test",
+    "address": "mcRaceBase::LoadCheckpoints 0x001CDC80; crossing test 0x001CF8B0; wrappers 0x001D1510 / 0x001D1550",
+    "evidence": "1CDCA1 [race+0x24]=count; 1CDCD8 [race+0x28]=array of 0x120-byte checkpoints (idx*0x120 via 'lea x,[i+i*8]; shl x,5'). Checkpoint: +0x04..+0x30 4x3 matrix (+0x28/+0x2C/+0x30 = position), +0xFC/+0x100/+0x104 position xyz, +0x108 height, +0x10C, +0x110 radius, +0x114/+0x118 'Arrow', +0x11C type (0 'Normal', 1 'Different'). 0x1CF8B0(cp,pos,isLast,flag,outDist2): horizontal dx^2+dz^2 <= (cp+0x110 radius + extra + const)^2 and 0 < dy < cp+0x108 -> passed. 1D1518 isLast = (idx == count-1).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Finish detection to race state 7 (offline and network)",
+    "address": "0x001E06E0 (racer-finished handler of race class vtable 0x46B4B8, vtbl+0x64); also 0x1C5C30, 0x1DA070, 0x1DD600 (other race types)",
+    "evidence": "1E0752 [entry+0x04]=1; 1E0759 inc [race+0x1250] (finished count); offline: 1E07BF..1E07CF if finished count == number of humans (0x2693C0 = setup+0x4C) state=7 else 6; 1E0842 call [0x557EEC]->vtbl+4 (EnterState). Network ([0x557EFC]+0x10>=0): finished mask [race+0x1258]==[net+0x14] -> 7; 1E0811/1E082B the host broadcasts with [net]->vtbl+0x130(state). 0x1C5C30/0x1DA070: offline they mark all racers finished and call EnterState(7); online only the host ([net+0x10]==[net+0x18]) sends +0x130(7).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Money reward for a career race (separate from ReportRaceResult)",
+    "address": "0x001CFC50 (race; once per race)",
+    "evidence": "1CFC56 gate [race+0x0E]==0, [0x53F2D4]==2; 1CFC82 call 0x1CF440 (recompute positions); 1CFC9D ebp=[entry+0x14] position; 1CFCBA rewards([career+0x14]).0x285B70(numRacers,pos): prize = rec+0x28 * factor (pos 1 = full, last = 0, 0x285B20); 1CFCCE..1CFCD7 add [careerData+0xACC] (Money), stat 'k$CE'; 1CFCFD [race+0x0E]=1. Positions are recomputed inside, so forcing 1st-place money means writing Money directly or hooking 0x1CF440.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "mcTkTournament::ReportRaceResult (multi-race events)",
+    "address": "0x00264D80 (vtable 0x470360 slot 4)",
+    "evidence": "264D83 requires [this+0x0C]; table 0x264E84: 0,1 -> 264DA3 inc [this+0xDC] (races done) + 0x263210, and result 1 also calls 0x2919E0; 2 -> assert 'Changed Vehicle? not supported'; 3 -> restart 0x263340/0x267570(index); 4 -> 0x264400; 5 -> 0x276EF0(0)+0x2907E0 (quit); 6 -> 0x2643D0. The next race is chosen in 0x264C60 -> 0x277AE0(word rec+0x04) at 264D42.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Game setup structs (next/current/spare) used to load a race",
+    "address": "globals 0x53F2E4 (next), 0x53F2E0 (current), 0x53F2E8; each 0x3E0 bytes, ctor 0x26B9E0 (alloc at 0x268D00)",
+    "evidence": "268D18/268D41/268D6A stores. Fields: +0x00 city (26B8F5/26B96C); +0x18 race type (26B9AF; checked 0x1C2B5A, 0x1D0130); +0x40 event index (264D53); +0x48; +0x4C number of human players (0x2693C0); +0x50; +0x68 race name string (copied from DB 26B920/26B990; compared by the online lobby 0x25F33); +0x108 network flag (0x2694A0); +0x114+i*0x2C player slots (0x2693D0); +0x3D8 local player index (0x2694D0).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Practical hook to credit the partner's win in the local career",
+    "address": "0x001C2B44..0x001C2B55 (or racer info +0x5D before EnterState(7))",
+    "evidence": "Built from confirmed pieces: setting [[race+0x65C][localIdx]+0x5D]=1 (or forcing push 0 at 1C2B52) before race state 7 makes 0x1D1810 call ReportRaceResult(0) -> 0x277530 + 0x2893C0. Preconditions: [0x53F2D4]==2, mcPgCareer+0x24==4, +0x56==0, and careerData+0x58 = this copy's UniqueId of the same (City, RaceIdx) race, set by starting it via 0x277990/0x277AE0. If the race is not in the local open list, 0x277530 indexes with -1 (277547..277553 have no check) and corrupts memory; a hook must check 0x27EFF0 != -1 first. To end the local race when the partner finishes: mark the local entry won/finished and call [0x557EEC]->vtbl+4(7).",
+    "status": "GUESS"
+   }
+  ],
+  "open_questions": [
+   "Global [0x53F2D4] == 2 is used everywhere as the career gate, but the name of each mode value is not confirmed. The table at 0x448488 holds 'filler/hookman/tournament/classrace/worldchamp/garage/career/arcade', but it is indexed by another field (loader +0x60), not by 0x53F2D4.",
+   "The game-state numbers on [0x557ED0] (mcGameState, EnterState 0x21D30) used by Progress (8 then 6 / 0x10 / 0x12 / 0x16) are not mapped to names yet. Only their use (load race/cruise, event, garage, front end) is inferred.",
+   "The hookman path calls 0x277990 at 0x1D917A. The exact code that then calls SetupNextCareerRace + Progress to begin loading was not traced. Candidates are 0x1D65C0/0x1D6680/0x1D8A10 and 0x1E2F70, the callers of 0x278270.",
+   "Filler races are generated from careerData+0xB14 Seed. A partner's open list may not contain the host's (City, RaceIdx). The co-op then needs either a sync of that race record into the partner's +0xA58 vector (record ctor 0x27D0A0, insert 0x282630) or a no-credit fallback.",
+   "Per-race-type finished handlers differ: 0x1E06E0 belongs to vtable 0x46B4B8; the 0x1C5C30, 0x1DA070 and 0x1DD600 classes were not checked. Which race class each career race type uses (race+0x10 values 1, 3, 4, 5, 6, 0x10, 0x14...) is still unmapped.",
+   "The existing network session object [0x557EFC] (+0x10 local net index, +0x14 player mask, +0x18 host index, vtbl+0x130 broadcast race state) may be reusable to sync race end; it was not analyzed further here."
+  ]
+ },
+ "find:ai-traffic": {
+  "summary": "Map of the AI opponents, traffic and multiplayer car slots (static analysis only). Addresses are VAs. Code starts at 0x10000, so functions sit around 0x0001xxxx\u20130x0037xxxx.\n\nKEY RESULT FOR THE CO-OP: AI opponents and human players are built through the same car factory into the same vehicle class. Base factory 0x361B30 makes a 0x3138-byte car with ctor 0xF4430, then applies a 0x108-byte car record with 0xF32A0, which sets tuning, parts, paint and the plate. The only difference is where the car record comes from:\n- AI: race descriptor +0x64.\n- Player i: game-settings slot i +0x120 (a pointer to a 0x108-byte record that the settings object owns).\n\nThe game's split-screen (2 local players) and network modes (up to 8, mask from the session object 0x557EFC) already create one full player object per settings slot, each built from that slot's record. So the cleanest way to show the partner's own campaign car is:\n- put the partner's garage record into slot 1 +0x120 (copy with 0x271E20, like 0x268E50 does);\n- set players = 2 at settings+0x4C;\n- let the player manager build it.\n\nThe local garage is an array of 0x108-byte records at 0x541700, the same format as the slot record.\n\nPOOLS:\n- Players: 8 settings slots and 8 player-manager slots.\n- Split-screen: at most 2.\n- Racer list at 0x558838: 10 pointers. Players plus competitive AI must be 10 or fewer; nothing checks the bound.\n- Non-competitive AI per race-list entry: 4.\n- Opponent name pool: 61 names (Tokyo has its own 30).\n- Traffic: no fixed number in code. The count comes from the city's \"_traffic\" resource (traffic manager +0x12C), with 0x21C-byte entries.\n\nRubber banding is computed per AI from distance thresholds and throttle limits set in the race file. Which human it measures distance to was not found.",
+  "findings": [
+   {
+    "what": "Global game-settings / race-setup object (0x3E0 bytes) used to build every race: current = [0x53F2E0], two more copies at [0x53F2E4] and [0x53F2E8]",
+    "address": "0x53F2E0 (ctor 0x26B9E0, allocated in 0x268D00)",
+    "evidence": "00268D29 push 0x3E0 / call 0x1B3B90 / 00268D3C call 0x26B9E0 / 00268D41 mov [0x53F2E0], eax (the same for 0x53F2E4 and 0x53F2E8). Ctor 0x26B9E0: 0026B9E5 lea edi,[esi+0x114]; mov ebx,8; loop call 0x2766C0; add edi,0x2C, so 8 player slots of 0x2C bytes at +0x114",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Settings field +0x4C = number of human players / player racers. +0x50 = number of local viewports (split-screen screens). Split-screen sets both to n (at most 2) and slot[i]+0x124 = i. Network / System Link sets +0x4C to between 2 and 8 with +0x50 = 1",
+    "address": "settings+0x4C, settings+0x50 (getter 0x2693C0 returns +0x4C)",
+    "evidence": "002693C0 mov eax,[0x53F2E0]; mov eax,[eax+0x4C]. Split-screen in 0x13A250: 0013A394 cmp ecx,0x02 / jl / mov ecx,2 (clamp 2); 0013A3C4 mov [edi+0x4C],edx; 0013A3CC mov [eax+0x50],edx; 0013A3DB add ecx,0x124; loop mov [ecx],eax (pad index). Network path: 0013A2AF cmp edx,0x08 ... 0013A2E6 mov [edx+0x4C],esi; 0013A2EE mov dword ptr [eax+0x50],1. HUD: 000B6AB2 mov eax,[eax+0x50] with 0x128+i*0x2C, pushed to \"hud_%d_player_game-player_%d\"",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Settings player slot i (0x2C bytes at settings+0x114+i*0x2C, ctor 0x2766C0). +0x0C (= settings+0x120+i*0x2C) is an OWNED pointer to a 0x108-byte CarRecord (ctor 0x271D20; model name at +0xE3). +0x10 (+0x124) = controller pad index. +0x14 (+0x128) = HUD player number. +0x18 (+0x12C) = -1 when unused. +0x20 (+0x134) = team. +0x26 (+0x13A) = flag that excludes the slot from racing",
+    "address": "settings+0x114 + i*0x2C (i = 0..7)",
+    "evidence": "002766C2 push 0x108 / call 0x271D20 / 002766ED mov [esi+0x0C],eax; mov [esi+0x18],-1. 00269410: mov eax,[eax+ecx+0x120]; add eax,0xE3 (car name). 00269450 returns +0x124. 002BD932 mov cl,[eax+0x26] (in IsSlotRacing 0x2BD920). 002BDC3B reads +0x134 (team 1/2)",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "How a player slot gets its car: CarRecord::CopyFrom (0x272010 jumps to 0x271E20) copies a garage entry into slot+0x120 for the 2 local players. Local garage = array of 0x108-byte CarRecords at 0x541700, indexed by the selected-car s16 at 0x53F2FE (2 entries, i.e. 2 local players). Alternative table 0x53F810 is used when the byte at 0x53F2FC[i] is 0",
+    "address": "0x268E50 (settings copy-garage-cars-to-slots); garage 0x541700; selected index 0x53F2FE[2]",
+    "evidence": "00268E6D mov esi,0x53F2FE; 00268E72 lea ebp,[edi+0x120]; 00268EB6 mov al,[ecx+0x53F2FC]; 00268EC2 movsx edx,word ptr [esi]; imul edx,edx,0x108; add edx,0x541700; push edx; 00268EE3 call 0x272010 (ecx=[slot+0x120]); 00268EF3 cmp esi,0x53F302 (2 iterations). Vehicle Select UI 0x18BA50 does the same: 0018BBEF imul esi,esi,0x108; add esi,0x541700; add esi,0xE3",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Player manager singleton (0x74 bytes, vtable 0x47615C): +0x08[8] = player objects, +0x28 = count (= settings+0x4C). GetPlayer(i) = 0x2BD910, IsSlotRacing(i) = 0x2BD920. The ctor creates one player (0x2EC bytes, ctor 0x2BFE50) per slot whose create-mask bit is set",
+    "address": "[0x558814] (created in 0x2BE2C0, ctor 0x2BE100)",
+    "evidence": "002BE119 mov [ebx+0x28],eax (eax = 0x2693C0 = numPlayers); loop 002BE170..002BE1FF over edi += 0x2C until 0x160 (8 slots): push 0x2EC / call 0x2BFE50 / 002BE1E5 mov [edx],eax (edx = this+0x08+i*4). 002BD914 mov eax,[ecx+eax*4+0x08]",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Player create-mask (0x2BD810). In a network game (settings+0x108 != 0), a slot i < numPlayers gets a player object if slot+0x26 == 0 and bit i is set in the session connected-mask [[0x557EFC]+0x14]. Otherwise only slot settings+0x3D8 (the local index) does. So remote network players already get full player objects and cars",
+    "address": "0x2BD810",
+    "evidence": "002BD825 cmp esi,[eax+0x28] / setl bl; 002BD82E call 0x2694A0 (settings+0x108); 002BD83D mov cl,[eax+0x26]; 002BD840 mov eax,[0x557EFC]; 002BD85F test [eax+0x14],edx (edx = 1<<i); 002BD869 call 0x2694B0 (settings+0x3D8); 002BD882 cmp esi,0x08",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "The player car is built from slot+0x120 by mcPlayerFactory: ctor 0x2CB270 (vtable 0x476940), Build 0x2CBC40. The result is stored at player+0x14 (the racer's car pointer)",
+    "address": "0x2C0021..0x2C005E (inside player ctor 0x2BFE50)",
+    "evidence": "002C0037 imul edx,edx,0x2C; 002C003A mov ecx,[edx+ecx+0x120]; push ecx ... 002C0050 call 0x2CB270; 002C0059 call 0x2CBC40; 002C005E mov [esi+0x14],eax. Build 0x2CBC40: 002CBC6C push 0x3138 / 002CBC9B call 0xF4430 (vehicle ctor); 002CBCA4 mov ecx,[esi+0x54] (CarRecord); 002CBCBA call 0xF32A0 (apply record, playerIdx = [esi+0xE8])",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "AI opponents are built with the SAME vehicle class and the SAME record-apply function as players, through an opponent factory (ctor 0x1FA970, vtable 0x46C730, Build 0x1FB040). Both factories derive from base 0x361B30, whose +0x54 = CarRecord*",
+    "address": "0x1FA970 / 0x1FB040 (called only from 0x1ED2F0)",
+    "evidence": "001FB0A4 push 0x3138 / 001FB0D6 call 0xF4430; 001FB0DF mov edx,[esi+0x54] / push -1 / push 1 / push edx / 001FB0F0 call 0xF32A0. Callers of 0xF4430 are only 0x1FB040, 0x2CBAE0 and 0x2CBC40. 00361B58 mov [esi+0x54],ecx in the base ctor",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Current race object: [[0x533E24]+0x04] (mcRaceBase-derived). +0x18 = number of AI opponents. +0x2C = array of 0x88-byte opponent descriptors. +0x98 + i*0xB8 = embedded per-player racer-progress entries. +0x658 = array of 0x60-byte AI racer-progress entries (ctor 0x1D2130). +0x65C = pointer array [numPlayers + numOpp]: players first, then AI",
+    "address": "race+0x18 / +0x2C / +0x98 / +0x658 / +0x65C (built in 0x1CD380 and 0x1D9720)",
+    "evidence": "001CD39E call 0x2693C0; add eax,[ebx+0x18]; shl eax,2; alloc; mov [ebx+0x65C],eax; 001CD3C3 lea edi,[ebx+0x98] ... add edi,0xB8 (players); 001CD400 mov ebp,[ebx+0x658]; add ebp,edi; mov [edx+(numPlayers+i)*4],ebp; add edi,0x60. 0x1D9720: 001D97C9 imul eax,eax,0x88 -> mov [ebp+0x2C]; 001D980A (n*0x60) -> mov [ebp+0x658],ebx",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Number of opponents in a race = popcount of settings+0x3D4 (the enabled-opponent bitmask) over the race file's opponent count. The race-file loader 0x1D3AE0 fills each 0x88 descriptor",
+    "address": "0x26B0C0 (count), 0x1D3AE0 (race opponent loader)",
+    "evidence": "001D3B09 mov ecx,edi(settings); call 0x26B0C0; 001D3B22 mov [ebp+0x18],edi. 0026B0CF mov edx,[edx+0x3D4]; shl edi,cl; test edx,edi; inc eax. 001D3D8E mov edx,[ecx+0x3D4]; test edx,eax (skips disabled opponent)",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Opponent descriptor layout (0x88 bytes, race+0x2C + i*0x88). +0x00 AI type (0 racer, 2 cop when cartype is a cop). +0x01 enabled-at-start flag (from DisabledAtStart). +0x02 RespawnCop. +0x03 AttackPlayersOnly. +0x04..07 CopBehave Ram/Nudge/Block/Alongside. +0x09 isCompetitor (0 when NonCompetitorAI). +0x0C ThrottleLimit. +0x10 InitialSpeed. +0x14 RubberBandMinDist. +0x18 MaxDist. +0x1C MinThrottle. +0x20 MinSpeed. +0x24 BehindMinDist. +0x28 BehindMaxDist. +0x2C BehindMaxThrottle. +0x30/+0x34 OutsideTraffic ThresholdSpeed/Penalty. +0x38..+0x44 start pos xyz + heading. +0x48 route (0x30-byte object, ctor 0x1E6BC0, parsed by 0x1E6360). +0x64 CarRecord* (0x108, ctor 0x271D20, type set by 0x272F70(cartype))",
+    "address": "descriptor struct (filled in 0x1D3D60..0x1D4235)",
+    "evidence": "001D3DC9 push 0x108 / call 0x271D20 / 001D3DED mov [edi+0x64],eax; 001D3E2B movss [edi+0x38],xmm0 (posdir); 001D3FE8 mov byte ptr [edi+0x09],1 (else 0 if NonCompetitorAI); 001D404E mov byte ptr [edi],2 when 0x269CA0(cartype) is true; RubberBand* fstp to [edi+0x14],[+0x18],[+0x1C],[+0x2C],[+0x20],[+0x24],[+0x28]; 001D407E mov [edi+0x48],eax (route)",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "AI opponent manager singleton (0x10 bytes): +0x00 count (= race+0x18), +0x04 competitive count, +0x08 array of 0x43C-byte opponent entries (ctor 0x1EC2D0, vtable 0x46BEA0). Filled by OppMgr::Init 0x1E43C0, which runs only when settings+0x10D (AI enabled) is set. Each entry is initialized by 0x1ED2F0(i, desc, i, arg)",
+    "address": "[0x534074] (created 0x1E4390, Init 0x1E43C0)",
+    "evidence": "001E43CB mov cl,[eax+0x10D] / jz skip; 001E43E2 mov edx,[eax+0x18] (race NumOpp); 001E43F0 mov [edi],edx; 001E440A imul eax,eax,0x43C; 001E4420 push 0x1EC2D0 ... call 0x120D0 (vector ctor); 001E4440 mov [edi+0x08],ebp; 001E44BA/44CE call 0x1ED2F0; 001E452F mov dl,[ecx+eax+0x09] / inc [edi+0x04]",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Opponent entry layout (0x43C bytes). +0x0C embedded racer base (ctor 0x2C8420, vtable 0x46BE80; the same base class as the player object), so entry+0x20 = racer+0x14 = car pointer. +0x54 u16 index. +0x5C AI driver object. +0x68 AI kind. +0x7C sub-object (ctor 0x1EAF20). +0xDC InitialSpeed",
+    "address": "0x1EC2D0 ctor, 0x1ED2F0 init",
+    "evidence": "001EC2DA lea esi,[edi+0x0C]; call 0x2C8420; mov dword ptr [esi],0x46BE80. Player ctor 002BFE5C also calls 0x2C8420. 001ED31A call 0x1FA970 / 001ED323 call 0x1FB040 / 001ED328 mov [esi+0x20],eax; 001ED349 mov [esi+0x54],bx; 001ED373 mov [esi+0xDC],eax",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "AI driver selection in 0x1ED2F0 (stored at entry+0x5C, kind at +0x68). First, special race types (race+0x10 in 10..20, via jump table): 0x1F9EC0 (0x21C bytes, kind 4), 0x1F92D0 (0x220, kind 5), 0x1F8BC0 (0x1D4, kind 6). If settings+0x48 is set: 0x1F8680 (kind 7). Otherwise by desc+0x00: 0 -> race opponent 0x1F8490 (0x1BC bytes, vtable 0x46C490, kind 1, gets route desc+0x50); 1 -> 0x1E5100 (kind 1); 2 -> cop 0x1EF8B0 (0x23C, kind 3); else -> base driver 0x1EBE40 (0x1B4, kind 0). All are built from route desc+0x48. Rubber-band and throttle params are copied from the desc into driver +0x74..+0x94",
+    "address": "0x1ED2F0",
+    "evidence": "001ED382 mov eax,[edx+0x10]; add eax,-10; cmp eax,0x0A; jmp [eax*4+0x1ED930]; 001ED450 mov al,[ecx+0x48]; 001ED490 movsx eax,byte ptr [edi] ...; 001ED5BE call 0x1F8490; 001ED5D5 mov dword ptr [esi+0x68],1; desc+0x18->[eax+0x7C], +0x14->+0x78, +0x1C->+0x80, +0x24->+0x84, +0x28->+0x88, +0x2C->+0x8C, +0x20->+0x74, +0x30->+0x90, +0x34->+0x94 (001ED63A..001ED714)",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Rubber banding is applied in the AI driver Update (0x1EB540). When car speed (entry+0xCC) > MinSpeed (+0x74) and gap d = driver+0x20 > 0 (AI ahead): t = clamp01((d - MinDist[+0x78]) / (MaxDist[+0x7C] - MinDist)), throttleLimit[+0x28] = lerp(base[+0x24], MinThrottle[+0x80], t). When AI is behind: t uses BehindMin/Max (+0x84/+0x88) and BehindMaxThrottle (+0x8C). Then scaled by the global difficulty float [0x4B3580]",
+    "address": "0x1EB540 (0x1EB79C..0x1EB8BF)",
+    "evidence": "001EB79C movss xmm0,[edx+0xCC]; comiss xmm0,[esi+0x74]; 001EB7AE movss xmm0,[esi+0x20]; 001EB7B8 movss xmm1,[esi+0x7C]; subss xmm0,[esi+0x78]; subss xmm1,[esi+0x78]; divss; ... 001EB7E5 movss xmm0,[esi+0x80] ... movss [esi+0x28],xmm0; 001EB80D movss xmm1,[esi+0x88]; subss xmm1,[esi+0x84]; 001EB84B movss xmm0,[esi+0x8C]; 001EB878 movss xmm1,[0x4B3580]. Global tuning keys (RubberBandingDifficultyIncreaseMapping etc.) are loaded in 0x1E3450",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Racer list singleton (0x2C bytes = 10 pointer slots plus count at +0x28), rebuilt by 0x2C8710. Order: one entry per player slot (the player object, or NULL), then &opp[j]+0x0C for each opponent with desc+0x09 (competitor). No bound check, so players + competitive AI must be 10 or fewer. A non-racing player slot with slot+0x18 != -1 is put into 'observer' camera mode. The index in this list equals the index in race+0x65C",
+    "address": "[0x558838] (created 0x2C86E0, rebuild 0x2C8710, remove 0x2C85C0)",
+    "evidence": "002C86E0 push 0x2C / mov dword ptr [eax+0x28],0; 002C87BB mov ecx,[edi+0x28]; lea edx,[ecx+1]; mov [edi+0x28],edx; mov [edi+ecx*4],eax (player); 002C8809 mov cl,[eax+ebx+0x09] / 002C8820 lea ecx,[eax+0x0C] / mov [edi+eax*4],ecx (AI); 002C87A5 push 0x476758 \"observer\". 0x327110 uses [0x558838][i] together with race->[0x65C][i]. 0x1D15B0: ebp = [0x558838]+0x28 - [0x558814]+0x28 = AI count",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Race-list entry parser (career/race catalogue). +0x00 RaceType, +0x04 AmbientDensity, +0x08 PedDensity, +0x0C weather, +0x0D time, +0x0F OpponentCount, +0x10 NumLaps, +0x27 CutSceneBitMask, +0x28[4] non-competitor car types (|0x80 = cop; at most 4, asserts 'PushNonCompetitiveOpponentCarIndex'), +0x0E total AI = opponents + non-competitors + cops",
+    "address": "0x26DA70",
+    "evidence": "0026DB2A push \"AmbientDensity\" ... movss [edi+0x04]; 0026DC3F push \"OpponentCount\" ... 0026DC71 mov [edi+0x0F],al; 0026DD10 cmp byte ptr [edi+ecx+0x28],0xFF; inc ecx; cmp ecx,4; 0026DD92 or eax,0x80 (CopCarTypes); 0026DDD8 mov [edi+0x0E],al",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Opponent display names: pool 'Opponent_%02d' modulo 61 (0x3D), Tokyo uses 'OpponentTokyo_%02d' for the first 30 (city == 3). Name is set through the racer-progress vtable +0x0C on race+0x658 entries. In network mode ([0x53F2D4]==2), player names are filled the same way from race vtable +0x5C/+0x60",
+    "address": "0x1D15B0",
+    "evidence": "001D16DE mov ecx,0x3D; div ecx; 001D16F5 cmp dword ptr [eax],3; 001D16FF cmp edi,0x1E; push \"OpponentTokyo_%02d\" / \"Opponent_%02d\"; 001D17C6 call [edx+0x0C]",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Traffic system root (12 bytes): +0x00 headlight glow tex, +0x04 star tex, +0x08 traffic manager. The manager is loaded in place from \"$/resources/city/%s_traffic\" when settings+0x10B (traffic on) is set. Its vtable is 0x44CE90: [0] dtor 0x6D890, [2] Init 0x6C840, [3] 0x69FA0, [6] returns \"tune/traffic\"",
+    "address": "[0x50152C] (created 0x6B8A0, load 0x6D9F0, fixup 0x6D4B0)",
+    "evidence": "0006D9F0: 0006DA68 mov al,[ecx+0x10B] / jz; 0006DA85 push \"$/resources/city/%s_traffic\" (city name = 0x2693F0 = [0x557EE4]+settings[0]*0x50); 0006DABC call 0x2105F0; 0006DAC6 mov [edi+0x08],eax. 0006D4C0 mov dword ptr [esi],0x44CE90. 0044CE98 = 0x6C840, 0044CEA8 = 0x7C2D0 (\"tune/traffic\")",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Ambient traffic vehicle pool. The traffic manager +0x12C (s16, comes from the resource) is the pool size. +0x130 = array of that many 0x21C-byte ambient vehicles (ctor 0x78070, vtable 0x44D1CC; a light class, NOT the 0x3138 player/AI car). +0x30/+0x34 = ambient types (ptr array, u16 count); type->+0x5C->+0x06 = instance count per type; each vehicle is initialized by 0x71AC0(type, 0, idx). +0x13C = count/30 + 1 (update slices). +0x11C = tune/traffic object (0x28 bytes, ctor 0x7F8C0). The pool is only allocated when [0x5587E0]+0x38 != 0",
+    "address": "0x6C840 (traffic Init)",
+    "evidence": "0006C8AE mov ax,[esi+0x12C]; movsx edi,ax; imul ecx,ecx,0x21C; 0006C8D5 push 0x78070 ... call 0x120D0; 0006C8EF mov [esi+0x130],ebx; 0006C901 mov edx,[esi+0x30] / 0006C90B mov eax,[eax+0x5C] / cmp [eax+0x06],bp; 0006C936 call 0x71AC0; 0006C98A mov eax,0x88888889 (/30) -> mov [esi+0x13C]",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Race-scripted ('controlled') ambient vehicles: race+0x788 (u16 count) and race+0x784 (array, stride 0xB8) are added to the traffic manager by 0x6D910 -> 0x6D7D0. They go into a growable vector at traffic+0x14+0x0C ({ptr, u16 count, u16 cap}, 0x21C entries, grows by 8). The 'Ambient Vehicles is not suported for no traffic option' assert fires when the ambient-type array (+0x10) is NULL",
+    "address": "0x6D910 / 0x6D7D0 / 0x6D8B0 (called from race 0x1CDB30 and 0x1D6FA0)",
+    "evidence": "001CDB3F movzx edx,word ptr [esi+0x788]; push edx; call 0x6D8B0; 001CDB59 call 0x6D910 (ecx = [[0x50152C]+0x08]). 0006D933 movzx esi,word ptr [ebp+0x788]; 0006D990 mov edx,[ebp+0x784]; add edi,0xB8; 0006D9A9 call 0x6D7D0. 0006D7F1 cmp [esi+0x04],ax(cap) / add eax,8 / call 0x6D620; 0006D837 imul esi,esi,0x21C",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "aiCurveCatrom (Catmull-Rom spline) is one of 3 curve types (type byte 0/1/2 -> base 0x354580, 0x35CAF0, aiCurveCatrom 0x35D1D0 with vtable 0x4A489C). They are fixed up in place inside a loaded path/road resource by 0x35AAC0, which is called from resource loader 0xEED70. This is the road/path geometry layer, not per-opponent state",
+    "address": "0x35D1D0 (ctor), 0x35CDD0 (GenerateCubics), 0x35AAC0 (curve-set fixup)",
+    "evidence": "0035AB10 movzx eax,byte ptr [ecx+0x04]; ...; 0035AB24 call 0x35D1D0 (type 2); 0035AB30 call 0x35CAF0 (type 1); 0035AB3C call 0x354580 (type 0); 0035D1DE mov dword ptr [esi],0x4A489C; 0035CDE8 push \"aiCurveCatrom::GenerateCubics()- NumVerts (%d) must be at least 4\"",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "[0x53F2D4] = front-end/game-flow mode; value 2 = online/network game (tested before net-specific code). Settings+0x108 = network-game flag, and settings+0x3D8 = local player's slot in a network game",
+    "address": "0x53F2D4, settings+0x108, settings+0x3D8",
+    "evidence": "00142EC5 mov dword ptr [0x53F2D4],2 next to setting +0x4C=+0x50=1 and calls on [0x557F0C]; 001ED5E4 cmp dword ptr [0x53F2D4],2 then [0x557F0C] lookups; 002694D0 returns +0x3D8 only if +0x108; 001CDA53 mov ebx,[0x53F2E4]; call 0x2694D0; imul eax,0x2C; mov ebx,[eax+ebx+0x120]",
+    "status": "GUESS"
+   },
+   {
+    "what": "Settings boolean flags copied from defaults at 0x4B36B0..0x4B36B4: +0x10B = traffic enabled (gates traffic load), +0x10D = AI opponents enabled (gates OppMgr::Init). +0x10A, +0x10C and +0x10E were not identified",
+    "address": "settings+0x10A..+0x10E",
+    "evidence": "00268FA2 mov al,[0x4B36B1] / mov [edx+0x10B],al; 00268FB3 mov dl,[0x4B36B3] / mov [ecx+0x10D],dl; 0006DA6E mov al,[ecx+0x10B] (traffic); 001E43CB mov cl,[eax+0x10D] (opponents)",
+    "status": "CONFIRMED"
+   }
+  ],
+  "open_questions": [
+   "Which human does the rubber-band gap (AI driver +0x20) measure against? The writer of driver+0x20 was not found. With 2 humans, check whether it picks the leader, player 0 or the nearest player.",
+   "Exact field layout of the 0x108-byte CarRecord (ctor 0x271D20, CopyFrom 0x271E20, apply 0xF32A0). Known so far: name at +0xE3, string at +0xF9 checked against \"blank\", plate charset used in 0xF32A0, bytes +0x14..+0x1C and dwords +0x0C/+0x10 used as tuning. These bytes are what must be sent to the partner.",
+   "How does a remote network player's car receive input and transforms? The player object (0x2EC bytes, vtable 0x476498) at +0x54 holds a 0x80-byte object (0x2C70E0, probably camera/viewport) and +0x6C a 0x14D0-byte object (0x3350F0); the network sync class was not traced.",
+   "Does split-screen (settings+0x50 = 2) run career/campaign races, or only arcade? A co-op that forces +0x4C = 2 with +0x50 = 1 (a second player car with no viewport, like the network path) may be the cleanest. This needs a check that HUD/camera code handles slot 1 having no local pad (slot+0x124).",
+   "race+0x98 holds 8 embedded player progress entries ((0x658-0x98)/0xB8 = 8). Is this the max players per race, and what are their fields (position, lap, finish time, needed for crediting both careers)?",
+   "Race type ids (race+0x10, 10..20) that select special AI drivers 0x1F9EC0/0x1F92D0/0x1F8BC0, and the settings+0x48 mode that selects 0x1F8680, were not named.",
+   "The traffic pool size (+0x12C) comes from each city's _traffic resource; its actual value needs reading from the resource file or at runtime."
+  ]
+ },
+ "find:player-car": {
+  "summary": "I traced the local player's car from the main loop down to the physics body; the full pointer chain is below. To get the car for player i: idx = GetLocalPlayerIndex() (0x2694D0, returns 0 when not in a network game), then player = *(0x558814 + 8 + 4*idx), vehicle = player+0x14, car = vehicle+0x08.\n\nWhat hangs off the vehicle and the car:\n- vehicle+0x04 is the input object (mcPlayerInput, vtable 0x47684C).\n- vehicle+0x1C is the phInst. Its world matrix is a packed 4x3 at +0x10, and the position is at +0x34.\n- car+0x68 is the collider, and collider+0x10 is the rigid body (vtable 0x4A33F8). On the body, linear velocity is at +0x44, angular velocity at +0x50, and its own copy of the 4x3 matrix at +0x5C (position at +0x80).\n- Speed is stored on the car at +0xB0 (length of the body's velocity).\n- The control fields on the car are steer +0x6C, throttle +0x70, brake/reverse +0x74, handbrake +0x78, flags +0x7C. The input update writes them every frame.\n\nTeleport / reset: write the spawn position to car+0x80 (0x3305F0), the rotation angles to car+0x8C (0x330610; the game uses (0, heading, 0)), and the starting velocity and spin to car+0x98 and car+0xA4. Then call the car's virtual Reset (vtable slot +4, which is 0x124520 and then 0xA2460). The game also has a snap-to-ground helper (0x122770), and the player-level wrappers are 0x2C8860 (set start position), 0x2C8690 (reset to start) and 0x2C19B0 (mcPlayer::Reset, used for the cruise reset).\n\nPer frame: main() at 0x12440 calls the main loop 0x1F9D0, which switches on the game state stored at [0x557ED0]+4. The game update 0x1EDB0 then calls:\n- the physics simulator 0x29D210 on [0x558120], which runs N substeps (frame time is the float at 0x4B2D48);\n- the player manager update 0x2BDEC0 on [0x558814];\n- the player manager in turn calls the vehicle manager [0x5638E4], whose update 0xFEF80 copies each car's matrix to its model.\nCar update is 0xFFD90 and input update is 0x2C9AA0.\n\nThe game already has system-link netcode for this input. In a network game (config+0x108 set) the controls are packed into 8 bytes (input+0x6C to +0x77). Remote cars are then driven from that packet by 0x2C9570.",
+  "findings": [
+   {
+    "what": "Player manager singleton and player array (GetPlayer)",
+    "address": "global 0x558814 (mcPlayerManager*, 0x74 bytes, vtable 0x47615C); player[i] at mgr+0x08+4*i; GetPlayer = 0x2BD910",
+    "evidence": "0x2BE2C0: push 0x74; call 0x1B3B90; call 0x2BE100; 0x2BE2D5 mov [0x00558814], eax. 0x2BE10C mov dword ptr [ebx], 0x47615C. Loop 0x2BE1D0 call 0x2BFE50 (mcPlayer ctor) then 0x2BE1E5 mov [edx], eax with edx walking ebx+0x08 step 4. 0x2BD910: mov eax,[esp+4]; mov eax,[ecx+eax*4+0x08]; ret 4. 0x2BF570 wraps it with ecx=[0x558814].",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Local player index helper and network flag",
+    "address": "0x2694D0 GetLocalPlayerIndex; config singleton [0x53F2E0]: +0x108 byte isNetworkGame (0x2694A0), +0x3D8 local net slot (0x2694B0), +0x4C player count (0x2693C0), per-player slot = cfg+0x114+0x2C*i (0x2693D0), slot+0x18 = controller port (-1 = none)",
+    "evidence": "0x2694D0: mov eax,[0x53F2E0]; mov cl,[eax+0x108]; test cl,cl; jz -> xor eax,eax; else mov eax,[eax+0x3D8]. 0x2693D0: imul eax,eax,0x2C; lea eax,[eax+ecx+0x114]. 0x2BE09B call 0x2694D0; mov eax,[edi+esi*4+0x08] (picks the local player in PlayerManager::Update). 0x2C99DA/0x2C99DF: [slot+0x18] read as pad id, compared with 0xFFFFFFFF.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "mcPlayer -> vehicle pointer (player+0x14); mcPlayer ctor/vtable",
+    "address": "mcPlayer ctor 0x2BFE50 (0x2EC bytes, vtable 0x476498); player+0x14 = vehicle; player+0x54 = camera/view object (+0x58 = viewed player index)",
+    "evidence": "0x2C0050 call 0x2CB270 (mcPlayerFactory ctor, vtable 0x476940); 0x2C0059 call 0x2CBC40 (factory Build); 0x2C005E mov [esi+0x14], eax. 0x2BE03E-0x2BE087: esi=[player+0x14]; mov ecx,[esi+0x08]; movss [ecx+0x70],0; movss [edx+0x74],0.1 (writes the car's throttle/brake through vehicle+8). 0x2C3FF0: [this+0x58]=idx; [this+4]=GetPlayer(idx), called on [player+0x54].",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Vehicle object layout (built by mcPlayerFactory)",
+    "address": "vehicle: ctor 0xFF160, 0x6C bytes, vtable 0x454F40 ([0]=dtor 0x100D70, [+4]=Reset 0xFFC50, [+8]=Update 0xFFD90, [+0xC]=0xFFA70). +0x04 input, +0x08 car (vehCar), +0x0C model/drawable (0xF6510, 0x49C bytes), +0x10 audio (0x10AC20), +0x14 (0x102210), +0x1C phInst (vtable 0x46C750, back pointer inst+0x40=vehicle), +0x4C car data, +0x50 vehCarSim tuning (0xE0 bytes, vtable 0x456550), +0x5D player index byte",
+    "evidence": "0x2CBDE0 (factory vtable slot 0x476944): new 0x6C -> 0xFF160; 0x2CBE48 mov dword ptr [ebp],0x46C750; 0x2CBE53 mov [ebp+0x40],esi; 0x2CBE56 mov [esi+0x1C],ebp; 0x2CBE79 mov [edi+0x44],esi. 0x361B80 'mov eax,[ecx+0x44]' returns the vehicle being built. 0x2CB3C9 mov [edi+0x08],esi (car) and 0x2CB3CE mov [esi+0x04],edi (car->vehicle). 0x2CB385 mov [ebx+0x04],edi (input). 0x2CB64D mov [ebp+0x0C],esi; 0x2CB964 mov [ebp+0x10],esi; 0x2CB6B7 mov [ebx+0x14],esi. 0xFF18D mov [esi+0x50],eax (0x121550 obj).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Car world transform: phInst Matrix34 (packed 4x3) at inst+0x10, position at inst+0x34; inst = [vehicle+0x1C] = [[car+0x04]+0x1C]",
+    "address": "inst+0x10..0x3F: row0 +0x10, row1 (up) +0x1C, row2 +0x28, pos +0x34/+0x38/+0x3C; inst+0x08 = phLevel index (word)",
+    "evidence": "0xFEFA0-0xFF01B (VehicleManager::Update): eax=[vehicle+0x1C]; copies [eax+0x10]..[eax+0x3C] (12 dwords) into model +0xA0..+0xCC. 0x2A38BA-0x2A390A (collider update): eax=[collider+4]+0x10; copies 12 dwords from the collider matrix into the inst. 0x123B99: mov eax,[esi+0x04]; mov ecx,[eax+0x1C]; movss xmm0,[ecx+0x20] (up.y, clamped >= 0, so row1 = up). 0x1E9340 returns [..+0x1C]+0x34 (position getter); 0x2A4A6D mov word ptr [eax+0x08],0xFFFF (level index). Naming rows 0/2 as right/forward is a guess.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Rigid body: linear velocity, angular velocity, mass, physics matrix; car -> collider -> body",
+    "address": "collider = [car+0x68] (vtable 0x4754D4; +0x04 phInst, +0x10 body, +0x14 matrix ptr); body = [collider+0x10] (vtable 0x4A33F8): +0x04 mass, +0x0C inertia, +0x2C momentum, +0x44 linear velocity, +0x50 angular velocity, +0x5C Matrix34 (pos at +0x80)",
+    "evidence": "0x3432B0 SetVelocity: mov [ecx+0x44..0x4C], v; [ecx+0x2C..]=v*[ecx+0x04]. 0x343300 SetAngVelocity writes [esi+0x50..0x58]. 0x342AC0 (body vtable+0x38, GetLocalVelocity): r = p - [ecx+0x80..0x88]; returns [ecx+0x44..] + w([ecx+0x50..]) x r. 0x341090: identity at +0x5C/+0x6C/+0x7C, zero at +0x80..0x88. 0x2A4590 collider init: mov [esi+0x10],eax (body); 0x2A3349 mov [esi+0x04],eax (inst); 0x2A3395 add edx,0x5C; mov [esi+0x14],edx. 0xA2620: mov [esi+0x68],ebp (car collider). 0x35E0D0: inst+0x40 -> vehicle+0x08 -> car+0x68 -> 0x2A3CD0 -> [collider+0x10] vtable+0x38.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Car speed (scalar)",
+    "address": "car+0xB0 = |[[car+0x68]+0x10]+0x44|",
+    "evidence": "0x330500 (car base vtable 0x4A1E18 slot +8): edx=[ecx+0x68]; eax=[edx+0x10]; sqrt(x^2+y^2+z^2) of [eax+0x44],[eax+0x48],[eax+0x4C]; fstp [ecx+0xB0]. Read by the input as speed: 0x2C9EBA mov eax,[esi+0x34]; mov ecx,[eax+0xB0].",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Per-frame control inputs on the car (steer/throttle/brake/handbrake)",
+    "address": "car+0x6C steer [-1,1], car+0x70 throttle [0,1], car+0x74 brake/reverse [0,1], car+0x78 handbrake, car+0x7C input flags; car+0x14 transmission (gear word at +0x14, 0xADAC0 up / 0xADAF0 down)",
+    "evidence": "0x2CA4C9-0x2CA506 in mcPlayerInput::Update: ecx=[[esi+0x50]+0x08]; mov [ecx+0x7C],[esi+0x54]; [ecx+0x6C]=[esi+0x18]; [ecx+0x70]=[esi+0x0C]; [ecx+0x74]=[esi+0x10]; [ecx+0x78]=[esi+0x14]. The same mapping is in the keyboard path 0x35F403 (mov [eax+0x70],ecx), 0x35F41D ([edx+0x74]), 0x35F4A5 ([eax+0x6C] smoothed), 0x35F4CA ([ecx+0x78]). Throttle/brake split at 0x2C9CFA-0x2C9D2A (negative -> brake, state 3 = reverse); steer from pad axis 0 clamped to +/-1 at 0x2C9DD1-0x2C9E02.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Player input object and its per-frame update",
+    "address": "mcPlayerInput ctor 0x2C9970 (0x84 bytes, vtable 0x47684C, base 0x35F230 vtable 0x4A4B18). Update 0x2C9AA0 (vtable +0x1C), reached from base Update 0x360200 (vtable +0x08). Fields: +0x0C throttle, +0x10 brake, +0x14 handbrake, +0x18 steer, +0x28 button bits, +0x2C gear, +0x34 car, +0x50 vehicle, +0x60 player slot, +0x64 pad mapper (0x2CA770; analog read 0x2CA890(n))",
+    "evidence": "0x360222-0x360226: mov eax,[esi]; call [eax+0x1C] (= 0x2C9AA0 in 0x47684C). 0x2C89F0: 0x35F2C0 sets [this+0x34]=car ([vehicle+8]); 0x2C8A0F mov [esi+0x50],edi (vehicle). Pads are polled through 0x84BD0/0x84D20/0x84D70/0x84DC0/0x84E10 on entries at 0x4AFD90+0x38*n (0x2C9AE2-0x2C9B8B).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Built-in network input replication (system-link): compressed per-frame control packet",
+    "address": "0x2C9570 (called at the end of 0x2C9AA0); packet = input+0x6C (flags dword) + bytes +0x70 throttle*255, +0x71 brake*255, +0x72 handbrake*255, +0x73 steer*127, +0x74 gear, +0x75/+0x76, +0x77 flags; +0x78 = packet-valid",
+    "evidence": "0x2C9580 call 0x2694B0; cmp eax,[esi+0x60]: local slot packs (0x2C958E fld [esi+0x0C]; fmul 255.0; mov [esi+0x70],al ... 0x2C95D6 mov [esi+0x73],al with 127.0). The remote branch 0x2C965F-0x2C971B unpacks (x 1/255, x 1/127) and writes car+0x7C/+0x70/+0x74/+0x78/+0x6C. 0x2CA4B2-0x2CA4B9 skips the direct write when 0x2694A0 (network) is true.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Teleport / reset-to-pose mechanism on the car",
+    "address": "car+0x80 reset position (setter 0x3305F0), car+0x8C reset rotation angles in radians (setter 0x330610; game uses (0,heading,0)), car+0x98 reset linear velocity, car+0xA4 reset angular velocity; apply with car vtable+4 Reset = 0x124520 -> 0xA2460",
+    "evidence": "0x3305F0: add ecx,0x80; copy vec3. 0x330610: add ecx,0x8C; copy vec3. 0xA2553-0xA2583: pos=[esi+0x80..]; lea ecx,[esi+0x8C]; call 0x87310 (sin/cos angles -> matrix). 0xA25BE-0xA25E1: edi=[0x5580F0] (phLevel), ebx=[[car+4]+0x1C]+0x08 level index; call [eax+0x8C](index,&matrix) moves the inst. 0xA25F2-0xA2609: body SetVelocity([esi+0x98]) and SetAngVelocity([esi+0xA4]). Used by the cruise reset 0x2C1A75-0x2C1AEE: car->0x3305F0(pos); [car+0x8C]=(0,deg*0.01745,0); call 0x122770; call [edx+0x04].",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Place-on-ground helper and racer start-position API",
+    "address": "0x122770 snaps car+0x80/+0x8C to the ground (raycast via phLevel vtable+0x58, then 0x3305F0/0x330610). Racer (base of mcPlayer): +0x14 vehicle, +0x18 start pos vec3, +0x24 heading. 0x2C8860 SetStartPosition(vec4* posHeading, bool liftByCarHeight); 0x2C8610 applies it; 0x2C8690 ResetToStart (also in vtable 0x476754); 0x2C19B0 = mcPlayer::Reset (vtable 0x476498+0x1C)",
+    "evidence": "0x1227FE call [edx+0x58] on [0x5580F0] from pos+1 to pos-3; 0x122A26 call 0x3305F0; 0x122A32 call 0x330610. 0x2C8646 call 0x3305F0 with [esi+0x18..0x20]; 0x2C8670 call 0x330610 with (0,[esi+0x24],0); 0x2C867B call 0x122770. 0x2C869A call 0x2C8610; 0x2C86A4 call [eax+0x04] (vehicle Reset 0xFFC50, which calls 0x35DDD0 -> car Reset). 0x2C8931-0x2C8959 stores pos/heading into +0x18..+0x24, then calls 0x2C8610. Callers of 0x2C8860 are race-setup code (0x1CBCA0, 0x1CC1C0, 0x1E4760, 0x1ED2F0).",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Main loop and per-frame world step (call chain to physics and vehicles)",
+    "address": "main 0x12440 -> 0x1F9D0 (main loop, switches on state [[0x557ED0]+4] via jump table 0x1FEDC) -> 0x1EDB0 (game update) -> phSimulator::Update 0x29D210 on [0x558120] (at 0x1EEC9) and PlayerManager::Update 0x2BDEC0 on [0x558814] (at 0x1EE94/0x1EEF7) -> VehicleManager [0x5638E4] vtable+0x10 = 0xFEF80 (base 0x35DA80 runs vtable+0x08/+0x0C on registered objects) -> vehicle Update 0xFFD90; present = 0x2D5460 -> 0x2D2990 -> D3DDevice_Swap 0x4187A0",
+    "evidence": "0x128A6 call 0x1F9D0 (ecx = game object). 0x1FA51 jmp [eax*4+0x1FEDC]; states 2/3 -> 0x1FB35 -> 0x1FB76 call 0x1EDB0; 0x1FAD9 call 0x2D5460. 0x1EEC3 mov ecx,[0x558120]; call 0x29D210. 0x29D210 loops [esi+0x14] substeps calling vtable +0x08/+0x0C/+0x10, with 0x20BA30(1,n) dividing frame dt (0x4B2D48, 1/60) by n. 0x2BDFF6/0x2BE0DC call 0x3308C0 (=mov eax,[0x5638E4]) then call [edx+0x14]/[edx+0x10]. 0xFEF85 call 0x35DA80; 0x35DA98 call [edx+0x08].",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Collider per-step update copies physics pose into the phInst (body -> inst sync)",
+    "address": "collider vtable 0x4754D4 slot +0x08 = 0x2A38A0",
+    "evidence": "0x2A38A3 mov ecx,[esi+0x10]; call [eax+0x24] (body integrate); 0x2A38AD call 0x2A37B0 (body+0x5C -> collider matrix, with centroid offset); 0x2A38BA-0x2A390A copy the 12-float matrix [collider+0x14] into [collider+0x04]+0x10. Which simulator vtable slot calls this per collider is not identified.",
+    "status": "CONFIRMED"
+   },
+   {
+    "what": "Car customization object passed into the vehicle build (link to partner's own car)",
+    "address": "factory+0x50 = car config object (0xF4430, 0x3138 bytes), factory+0x54 = custom data applied by 0xF32A0; factory+0x4C = car data (0x105B80)",
+    "evidence": "0x2CBB15 push 0x3138; call 0x1B3B90; 0x2CBB3B call 0xF4430; 0x2CBB49 mov [esi+0x50],eax; 0x2CBB55 call 0xF32A0 with [esi+0x54]; 0x2CBB6F call 0x105B80 -> mov [esi+0x4C],eax. That this holds parts/paint/vinyls is inferred from size and context; not traced into the career save.",
+    "status": "GUESS"
+   }
+  ],
+  "open_questions": [
+   "Which vtable slot of the phSimulator at [0x558120] (+0x08/+0x0C/+0x10 in the 0x29D210 loop) iterates the active colliders and calls collider vtable+0x08 (0x2A38A0)? The simulator's vtable/ctor was not resolved.",
+   "Does the system-link mode only send inputs (lockstep, packet at input+0x6C..+0x77), or does it also periodically send full transforms? A state sync would let a joining partner's car be placed via car+0x80/+0x8C + Reset.",
+   "Exact semantics of rows 0 and 2 of the inst Matrix34 (right vs forward, sign) and the order of the rotation angles in 0x87310; only row 1 = up (inst+0x20 = up.y) is confirmed.",
+   "Is writing the inst matrix (inst+0x10) or the body matrix (body+0x5C) directly enough to teleport? Body->inst sync happens every step (0x2A38A0), so writing the body (and zeroing body+0x44/+0x50) is probably required; the confirmed safe path is car+0x80/+0x8C plus vtable+4 Reset.",
+   "Which list in the vehicle manager base (0x35DA80: +0x64/+0x68, +0x0C/+0x10, +0x14/+0x18, ...) holds the input objects and which holds vehicles; slot +0x0C of the vehicle (0xFFA70) takes 2 args, so it is probably called from elsewhere.",
+   "Opponent/AI vehicles use a different factory (0x2CB270 ctor is shared through mcPlayerFactory only for players and the showroom). For co-op, a second human car could be spawned by creating another mcPlayer via 0x2BFE50 with a network slot whose config (cfg+0x114+0x2C*i) points to the partner's car config."
+  ]
+ },
+ "verify:car-config": {
+  "checked": [
+   {
+    "what": "CarCfg class: vtable 0x4483DC, ctor 0x271D20, dtor 0x19040, copy 0x271E20 (thunk 0x272010), size 0x108",
+    "address": "vtable 0x4483DC; ctor 0x271D20; dtor 0x19040; copy 0x271E20; thunk 0x272010; field registration 0x270E80",
+    "verdict": "holds",
+    "reason": "Checked in the code. In the XBE, vtable 0x4483DC = {0x19040, 0x19030}, and 0x19030 is 'mov eax,0x4483E4; ret', with 0x4483E4 holding the string \"CarCfg\". 0x271D2C: mov dword ptr [esi],0x4483DC. 0x19040: lea ecx,[esi+0x56]; mov [esi],0x4483DC; call 0x1E2D40; call 0x20E160 (scalar deleting dtor). 0x2766C2 and 0x1D3740 both do push 0x108; call 0x1B3B90; call 0x271D20. 0x26C355..0x26C35C: call 0x271D20; add esi,0x108. 0x272010 is jmp 0x271E20. The copy 0x271E20 copies +0xE3 (0x16 bytes), +0xF9 (13 bytes), +0x0C.., +0x20, +0x24.., +0x33, +0x36, +0x3F, +0x56, +0x65..+0x76, +0x78 (rep), +0x94, +0x96..+0x98, +0x9C, +0xA0.., +0xD7..+0xE2 and +0x04. It sets [ebx+0x08]=0x3FFF at 0x271E82 and returns with ret 4. The vtable word before it, 0x4483D4, is a separate 2-entry vtable {0x18FD0, 0x19000} that 0x273100 uses for the unlock object.",
+    "corrected": ""
+   },
+   {
+    "what": "CarCfg field layout from registration 0x270E80",
+    "address": "CarCfg+0x0C..+0x105",
+    "verdict": "holds",
+    "reason": "I parsed every call to 0x32F3D0 in 0x270E80; the pushed args are (type, name, ptr, count, 0). All listed offsets and names match. Examples: 0x271002 type 6 Camber0 +0x0C. 0x2711BA type 3 SpoilerIdx +0x28 (name 0x47257C). 0x270EA1 type 0 TypeName +0xE3, with [eax+0x0A]=0x16 set at 0x270EBA. 0x270EC0..0x270FEC ProfileName1..13 at +0xF9..+0x105. In the loop 0x2713C0..0x271471 the PaintColorX/Y/A%d fields are at edi+0x41+3i, +0x42+3i and +0x43+3i, and ColorShift%d is at edi+0x50+i (i<5). The loop at 0x2719F0 registers EngineState%d at +0x56+i (i<7); after it come Trans +0x5D/5E, Suspension +0x5F/60, Brake +0x61, Tire +0x62 and Hydraulics +0x63/64. 0x271B36 registers Vinyl as type 4 at +0x94. 0x271B4C/62 register UseCustomLogosFront/Rear as type 1. 0x271CF5..0x271D04 register Logos as type 4, count 0x0E, at edi+0x78. Corrections: (a) CustomWindowFontFront (0x271CDB) and CustomWindowFontRear (0x271CEE) are BOTH registered at +0x96 (ebx is reused). (b) +0x08 (dirty mask) and +0x04, +0x97, +0x98, +0x9C and +0xD7..+0xE2 are not registered fields. 0x271E20 copies them and 0xF32A0 reads +0x08, but they are not part of the tune file.",
+    "corrected": "Same layout, except: CustomWindowFontFront and CustomWindowFontRear both map to the single byte +0x96. The +0x04, +0x08 (dirty mask), +0x97/+0x98, +0x9C and +0xD7..+0xE2 fields are not registered; only the copy 0x271E20 handles them."
+   },
+   {
+    "what": "Model identity via TypeName (+0xE3) and the vehicle table",
+    "address": "[0x557EB0] stride 0x28; count [0x557EB4]; 0x26A6A0; 0x272FA0; 0x272F70",
+    "verdict": "holds",
+    "reason": "0x272FA0: add ecx,0xE3; push ecx; call 0x26A6A0; mov ecx,[0x557EB0]; lea eax,[eax+eax*4]; lea eax,[ecx+eax*8]. 0x272F70: mov eax,[edx+eax*8] (edx=[0x557EB0]); add ecx,0xE3; push 0x16; call 0x20CF50 with fmt 0x448408 \"%s\". 0x26A6A0 loops esi<movzx [0x557EB4] with add edi,0x28, compares the name ptr [table+edi] using 0x2DB20D, and returns -1 if nothing matches. It first strips a \"dlslot\" prefix (0x459E9C, then 0x26A630).",
+    "corrected": ""
+   },
+   {
+    "what": "Per-model stock CarCfg loaded from tune/vehicle/customdata",
+    "address": "0x2733B0 -> 0x273040",
+    "verdict": "holds",
+    "reason": "0x2733B3: mov eax,[esi]; call [eax+4] (vtable slot 1 = 0x19030 returns \"CarCfg\"); push eax; push 0x471E98 (\"tune/vehicle/customdata\"); push name; call 0x273040. 0x273040 calls 0x32F7D0, then 0x270E80 (register), then 0x32F9A0 (load; the result is returned in bl), then mov [esi+0x08],0x3FFF, then 0x32F840. 0x26CB41 confirms it is called with the vehicle-table name ptr. I did not open 0x32F9A0, so the exact path format is unverified.",
+    "corrected": ""
+   },
+   {
+    "what": "Live profile at 0x53F308: garage CarCfg[30] at +0x508 (0x53F810), owned count +0x504, current slot +0x505, stock CarCfg[127] at +0x23F8 (0x541700), unlock objects at +0xA6F0, dirty byte +0x18340",
+    "address": "0x53F308; 0x53F80C; 0x53F80D; 0x53F810; 0x541700",
+    "verdict": "holds",
+    "reason": "0x378A80: mov ecx,0x53F308; call 0x26D290, which calls 0x26CE90 and then clears [esi+0x18340]. 0x26CEBA: lea esi,[ebx+0x508]; mov edi,0x1E; call 0x271D20; add esi,0x108. 0x26CED5: lea esi,[ebx+0x23F8]; mov edi,0x7F. 0x26CEF0: lea esi,[ebx+0xA6F0]; x0x7F; call 0x273100; add esi,0x1BC. 0x26CAC0 clears +0x504/+0x505. For ebx<0x4B0 (30*0x28) it resets [edi-0x1EF0] (=+0x508+i*0x108) to TypeName \"blank\" (0x45B9F0), then loads defaults (0x2733B0) into +0x23F8+i*0x108. 0x13C5A0: imul ecx,0x108; lea ecx,[ecx+esi+0x508]; call 0x271E20; mov byte [esi+0x18340],1; ret 8. 0x26BB80 decrements [esi+0x504] and zeroes [esi+0x505].",
+    "corrected": ""
+   },
+   {
+    "what": "mcMemCard global [0x4CB690] holds a profile copy at +0x14 and an old-format profile at +0x1E504",
+    "address": "0x1A9B0, ctor 0x1A8D0, vtable 0x44840C",
+    "verdict": "holds",
+    "reason": "0x1A9B0: push 0x33560; call 0x1B3B90; call 0x1A8D0; mov [0x4CB690],eax. 0x1A8D6: lea ecx,[esi+0x14]; mov [esi],0x44840C; call 0x26CE90. 0x1A8E7: lea ecx,[esi+0x1E504]; call 0x26C320. 0x26C320 uses counts 0x1E, 0x66 (at +0x23F8) and 0x66 (at +0x8D28). The \"mcMemCard::Update\" string (0x448440) is referenced by 0x1A9E0, which uses the same this-layout ([esi+0x334F4], [esi+0x334F8]). How the save copy syncs to 0x53F308 is not traced (agreed).",
+    "corrected": ""
+   },
+   {
+    "what": "0x155920 picks the player's car (garage vs stock) into a setup slot CarCfg",
+    "address": "0x155920; flags 0x53F2FC / 0x53F2FE",
+    "verdict": "holds",
+    "reason": "Logic confirmed. 0x155920: mov al,[0x53F2FC]; if nonzero, esi = movsx word [0x53F2FE]*0x108+0x541700; else esi = movzx byte [0x53F80D]*0x108+0x53F810. 0x1559AD: edi=[esp+0x20]; if 0, edi=[[0x53F2E4]+arg*0x2C+0x120]; then call 0x272010. The garage menu at 0x152E56 tests [0x50F130]. If it is set: FE = model index (0x152E9B) and FC=1 (0x152EAB). Otherwise: copy 0x53F810+[ebp+0x731]*0x108, FC=0 (0x152EFE), FE=[ebp+0x731]. CORRECTION on argument order: this is a thiscall on the frontend object (callers pass ecx=[0x50F148]). The stack args are (a1, a2, slotIndex, destCarCfg*). The slot is the 3rd arg ([esp+0x1C] at 0x1559B5), not the 1st. a1/a2 are passed to 0x153510/0x155280. Caller 0x2F0A1..0x2F0AC decodes as mov ecx,[0x50F148]; push esi(msg+0x88); push -1; push ebx(0); push ebx(0); call 0x155920. After the copy, if src[+0xE2]==0, the function randomizes something (rand at 0x4B2D04).",
+    "corrected": "0x155920 is thiscall(ecx=frontend [0x50F148]) with args (a1, a2, slot, CarCfg* dest). dest==NULL means [[0x53F2E4]+slot*0x2C+0x120]."
+   },
+   {
+    "what": "Race setup objects [0x53F2E0]/[0x53F2E4]/[0x53F2E8], size 0x3E0, 8 player entries at +0x114 stride 0x2C, CarCfg* at entry+0x0C (+0x120)",
+    "address": "alloc 0x268D00; ctor 0x26B9E0; entry ctor 0x2766C0; copy 0x26B2E0 / 0x276570",
+    "verdict": "holds",
+    "reason": "0x268D00 does push 0x3E0; call 0x1B3B90; call 0x26B9E0 three times and stores to [0x53F2E4] (0x268D18), [0x53F2E0] (0x268D41) and [0x53F2E8] (0x268D6A). 0x26B9E5: lea edi,[esi+0x114]; mov ebx,8; call 0x2766C0; add edi,0x2C. A second 0x2C-stride array starts at +0x274. 0x2766C2..0x2766ED: push 0x108; call 0x271D20; mov [esi+0x0C],eax. 0x269410: imul 0x2C; mov eax,[eax+[0x53F2E0]+0x120]; add eax,0xE3 (this reads 0x53F2E0, the active setup). 0x268FF0: ecx=[0x53F2E0]; push [0x53F2E4]; call 0x26B2E0. 0x26B457..0x26B47F loops call 0x276570 per entry, and 0x276589..0x276593 copies entry+0x0C CarCfg via 0x272010. The names 'active' vs 'lobby/pending' are inferred from the copy direction (E4 -> E0) only.",
+    "corrected": ""
+   },
+   {
+    "what": "Player spawn path reads [0x53F2E0]+slot*0x2C+0x120 and passes the CarCfg to mcPlayerFactory (+0x54)",
+    "address": "0x2BE100 -> 0x2BFE50 -> 0x2CB270 / 0x361B30 -> 0x2CBC40",
+    "verdict": "holds",
+    "reason": "0x2BE10C: mov [ebx],0x47615C. The loop at 0x2BE170 creates a player only if byte flag[i] is set. Per slot it does push 0x2EC; call 0x1B3B90; push ..; push esi(slot); call 0x2BFE50. I disassembled the gap in 0x2BFE50 with capstone: 0x2C0005 mov ecx,[0x53F2E0]; 0x2C0037 imul edx,edx,0x2C; 0x2C003A mov ecx,[edx+ecx+0x120]; push ecx; push eax(slot); push ebx(0); push edx; call 0x2CB270; call 0x2CBC40; mov [esi+0x14],eax. 0x2CB270 forwards (a1, a4=CarCfg*) to 0x361B30, which stores it at [esi+0x54] (0x361B58). It also sets [esi+0xE8]=a3 (slot), [esi+0xE4]=a2, [esi+0xE1]=a5, [esi+0xEC]=a6 and vtable 0x476940. 0x476980 holds the string \"mcPlayerFactory::MakeFeedback()...\".",
+    "corrected": ""
+   },
+   {
+    "what": "mcPlayerFactory build creates mcCarCustom (0x3138) and applies the CarCfg via 0xF32A0",
+    "address": "0x2CBC40; 0xF4430; 0xF32A0; frontend 0x2CBAE0",
+    "verdict": "holds",
+    "reason": "0x2CBC46: lea edi,[esi+4]; push edi; call 0x26A6A0. The model name comes from the factory's own +4 string, not directly from the CarCfg. Then push 0x3138; call 0x1B3B90; ... push 0x448CF8; push edi; call 0xF4430; mov [esi+0x50],eax. 0x2CBCA4: mov ecx,[esi+0x54]; push [esi+0xE8]; push 1; push ecx; call 0xF32A0. A second ApplyCarCfg at 0x2CBD07 targets [x+0x68]. 0xF32A0: mask=0x3FFF if arg2 else [cfg+8]; and eax,0x3F7F. 0xF4430 references 0x454BC4 \"mcCarCustom\" and 0x454BD0 \"tune/vehicle/customdata/%s\". On the frontend path, 0x2CBB68 does mov ecx,[0x50A08C]; call 0x105B80 with [esi+0x54] and [esi+0x50].",
+    "corrected": ""
+   },
+   {
+    "what": "Net session [0x557EFC] (ctor 0x24300, size 0xC4, vtable 0x449100); dispatcher 0x1AF470 with jump table 0x1AF6F4; 0x44 -> vtable+0x1A0",
+    "address": "0x24300; 0x1AF470; 0x1AF6F4",
+    "verdict": "holds",
+    "reason": "0x24301: push 0xC4; call 0x1B3B90; call 0x1AF1C0 (base); 0x24331 mov [esi],0x449100; 0x24348 mov [0x557EFC],eax. 0x1AF474: movzx edx,byte [eax]; add edx,-0x40; cmp 0x28; jmp [edx*4+0x1AF6F4]. Table entry 4 (msg 0x44) = 0x1AF509: push esi; push eax; call [edx+0x1A0]; ret 8. Vtable 0x449100 slot 0x13C = 0x25D20 and slot 0x1A0 = 0x26370. The meaning of [sess+0x10] as local slot and [sess+0x18] as host slot is consistent with 0x25DC2..0x25DDE but still inferred. [sess+0x14] is a bitmask of present players (used by 0x2BD85F).",
+    "corrected": ""
+   },
+   {
+    "what": "SendCarCfg 0x25D20 builds msg 0x44 (size 0x114, CarCfg at +8, slot +0x110, flag +0x111)",
+    "address": "0x25D20 (vtable 0x449100+0x13C)",
+    "verdict": "holds",
+    "reason": "Args are (CarCfg* src, slot, bool, flag, destMask). 0x25D27 ebx=a2 (slot; -1 -> [esi+0x10]). 0x25D3A edi=a5 (0xCAFEBABE -> 1<<[esi+0x18]). msg[0]=0x44, [2]=8, then 0x114 at 0x25D81. CarCfg is built at msg+8 (0x271D20), then 0x272010 copies a1 into it. msg+0x110=bl, msg+0x111=a4. If a3 is set, 0x2C2190(msg+8) runs first. Local delivery happens when local==host!=-1 && slot==local && mask==1<<host, via call [vt+0x1A0]. Otherwise it calls [vt+0x24](msg, mask, 0). Callers 0x15F832 and 0x15E4C2 pass (this+0x378, -1, 1, 0, 0xCAFEBABE). 0x15E1A0 returns the string \"mcNetworkWaiting\", and its ctor constructs a CarCfg at +0x378 (0x15DF1A..0x15DF38).",
+    "corrected": ""
+   },
+   {
+    "what": "OnCarCfg 0x26370 stores msg CarCfg into [[0x53F2E4]+slot*0x2C+0x120]; host relays to others; rejection branch",
+    "address": "0x26370 (vtable+0x1A0)",
+    "verdict": "holds",
+    "reason": "0x263A6..0x263BC: size must be 0x114. Host branch (0x263C2): if msg.slot==sender (arg2) and [[[0x50F148]+0xC]+0x8C]!=0 and 0x15B590() is true, it replies with the stored setup CarCfg, sets msg+0x111=1, sends to 1<<msg.slot via [vt+0x24], and returns without storing. Otherwise 0x264B7 does mov ecx,0x45; rep movsd; mask=~(1<<[ebx+0x18]); call [vt+0x24] (relay, which includes the sender), then falls through. Common path 0x26507..0x26522: [[0x53F2E4]+msg[0x110]*0x2C+0x120] <- copy(msg+8). Note: the rejection only applies when the slot in the message equals the sender's slot.",
+    "corrected": ""
+   },
+   {
+    "what": "Join message (type 0x04, 0x198 bytes, CarCfg at +0x88); client fill 0x2EFF0; host handler 0x2EC80 stores into the assigned slot",
+    "address": "0x1AF950; 0x5C1D0; 0x2EFF0; 0x2EC80",
+    "verdict": "holds",
+    "reason": "0x1AF951: push 0x198; call 0x5C1D0 (mov byte [esi],0x04; name at +0x11; +0x84 byte); lea ecx,[esi+0x88]; call 0x271D20; [+0x190]=[+0x194]=0; word [esi+2]=0x198. Pointer table: [0x4490AC]=0x1AF950, [0x44A514]=0x2EFF0, [0x44A4FC]=0x2EC80. 0x2EFF0: [edi+0x190]=0x2E970(). 0x2F066..0x2F07A copies [[0x53F2E4]+0x120] (slot 0) to msg+0x88. If vehicleEntry(+0x18)!=0 and [0x50F148]!=0, it calls 0x1550B0 and then re-picks via 0x155920(0,0,-1,msg+0x88) (gap bytes decoded with capstone at 0x2F095..0x2F0AC). [edi+0x194]=[0x522BB8]. 0x2C2190(msg+0x88) runs as well. Host: edi=[0x53F2E4] (0x2ED4C) is still live on the path to 0x2EE49. 0x2EE71 call 0x2132F0 returns slot esi; if != -1, 0x2EE7D..0x2EE8E copies msg+0x88 into [[0x53F2E4]+slot*0x2C+0x120]; then 0x2E8E0(slot, [msg+0x190]).",
+    "corrected": ""
+   },
+   {
+    "what": "0x268D80 puts the profile's current garage car into setup slot 0 (and slot 1 for split-screen)",
+    "address": "0x268D80 (callers 0x12440, 0x126C8, 0x33D6C0)",
+    "verdict": "holds",
+    "reason": "The slot 0 part is correct. 0x268DE3..0x268E02: movzx edx,byte [0x53F80D]; imul 0x108; add 0x53F810; mov ecx,[[0x53F2E4]+0x120]; call 0x272010. CORRECTION: the slot-1 copy is unreachable in this function. 0x268DCB/0x268DE0 set [[0x53F2E4]+0x50]=ebx=1 right before 'cmp [eax+0x50],ebx(1); jle skip', so the copy to [setup+0x14C] never runs here. Context: the function also calls 0x59150 on the profile, sets setup+0x10F=1, calls 0x26B050(\"sd\") and 0x26BAB0, and zeroes +0x54. Caller 0x12440 runs it during game init (0x268D00 alloc -> 0x268D80 -> 0x268FF0 copy to active). 0x33D6C0 runs it after setting [0x53F2FE]=0, [0x53F2FD]=1 and 0x26B510 (reset). So this is a generic 'default setup = garage car in slot 0' routine, not specifically a career start.",
+    "corrected": "Only slot 0 is written ([setup+0x50] is forced to 1 just before, so the [setup+0x14C] copy is dead code here)."
+   },
+   {
+    "what": "Co-op hook (GUESS): write the partner's CarCfg into [[0x53F2E4]+n*0x2C+0x120] before 0x268FF0, or into [[0x53F2E0]+n*0x2C+0x120] before 0x2BE100",
+    "address": "0x268FF0 / 0x2BE100; slot activity 0x2BD810",
+    "verdict": "unclear",
+    "reason": "The data flow is consistent with the code: 0x268FF0 copies E4 to E0 via 0x26B2E0/0x276570, and 0x2BFE50 reads E0 slot+0x120. I traced the slot activity left open by the analyst (0x2BD810, writes byte flag[i] for i<8). Active = i < [[0x53F2E0]+0x4C] (0x2693C0). When the network flag [[0x53F2E0]+0x108] (0x2694A0) is set, these are also required: entry byte [setup+0x114+i*0x2C+0x26]==0, and bit i in [[0x557EFC]+0x14] if [sess+0x10]>=0, otherwise i==[setup+0x3D8] (0x2694B0). Offline, every slot < count is created, and slots other than the local one are presumably AI (not verified). Not verified: whether a human-vs-AI flag in the entry (e.g. entry+0x18 != -1, read at 0x2BE186) must also change for the injected slot, and whether career race setup later overwrites the slot CarCfgs after the injection point. The hook points are plausible but not proven.",
+    "corrected": "Slot activity is decided by 0x2BD810: i < [setup+0x4C]; and, if [setup+0x108] (network): entry+0x26==0 and bit i of [session+0x14]."
+   }
+  ]
+ },
+ "verify:save-progress": {
+  "checked": [
+   {
+    "what": "Pointer to the career manager mcPgCareer (global)",
+    "address": "0x00557F0C",
+    "verdict": "holds",
+    "reason": "I saw all three call sites in the asm: 0x1D183C 'mov ecx,[0x557F0C]' then 0x1D1843 'call 0x277EE0'; 0x1A5D5/0x1A5DB 'call 0x277250'; 0x195EB/0x195F7 'call 0x277E20'. The string at 0x473C7C is 'mcPgCareer::ReportRaceResult(): unsupported game state: %d' and it is pushed at 0x277FB2 inside 0x277EE0. 0x277E20 and 0x277250 call 0x2829E0 and 0x27F740 with ecx=[esi+0x0C] (0x277E5B, 0x277288).",
+    "corrected": ""
+   },
+   {
+    "what": "mcPgCareer member layout",
+    "address": "mcPgCareer+0x0C/+0x10/+0x14/+0x20/+0x24/+0x28/+0x2C/+0x56/+0x58/+0x5C/+0x60",
+    "verdict": "holds",
+    "reason": "Checked each offset. 0x287F50 (called with ecx=[esi+0x10] at 0x277E69) calls 0x283CB0 on [esi+0x20], 0x28CE20 on [+0x24] and 0x291DE0 on [+0x28]. Their strings are NumCities/NumCarClasses/NumRacesBeaten/NumRacesOpen/COLastRace, LastPlayerVehicle/LastPlayerPerformanceModValue, and TimeOfDay/Weather/TODTimeSpend. 0x1CFC8C 'mov esi,[eax+0x14]'; 0x2840E0 is 'mov eax,[ecx+0xBC]; ret'. 0x277F8C sets +0x20=1 and 0x1A62D clears it; 0x1D185E also sets it. 0x277EF8/0x277EFB 'mov ebx,[esi+0x24]; cmp ebx,4'. 0x277F03 'mov [esi+0x28],edi'. +0x2C transitions: 5->1 at 0x277F2A, 6->7 at 0x277F3B, 1/2/3->4 at 0x277F97, and 0 (or result==4 while +0x24==4)->3 at 0x277F74; apart from 5 and 6, these only apply when +0x24==4. +0x58/+0x5C/+0x60 are written by fstp/movss at 0x278017, 0x27802B and 0x278056 (also at 0x277E88-0x277EC5 after a load). +0x56 is a guard byte at 0x277FCB. The names 'sub-state' and 'next state' are interpretation.",
+    "corrected": ""
+   },
+   {
+    "what": "Career data object fields",
+    "address": "[[0x557F0C]+0x0C] + offsets",
+    "verdict": "holds",
+    "reason": "I resolved every pushed name string in 0x2829E0 against the default.xbe bytes. They match the lea offsets: 0x474274 CurrentCareerCity at +0x50, NumOpenRaces at +0xA58, NumPutAsideRaces at +0xA68, NumHistoricRaces at +0x55C (ring of 30 x 0x20; count [+0x55C+0x3C8]=+0x924, head +0x91C), PreviousRacesCareer at +0x928 (head +0x9A0, count +0x9A8), PreviousRacesTokyo at +0x9AC (40 entries, head +0xA4C, count +0xA54), NumOpenHookmen at +0xA90 (sar 4, so elements are 0x10), Beaten at +0xAA0+i, CurrentCareerOrder +0xAC9, NumberOfWonRaces +0xA78, NumberOfSkippedRaces +0xA7A, NumFillerRacesWon +0xA7C x4, Seed +0xB14, UniqueRaceIdCounter +0xB18, Money +0xACC, AnnounceRace +0xCBE, AutoXTutorialPlayed +0xCBF, TournamentTutorialPlayed +0xCC0, NumStats +0xAD4, Collects +0xAE4 x12, CarConfigNames +0xB1A with stride 0x23, CruiseStartData +0x20..+0x30, and 'call 0x27C460' on [esi+0x10] at 0x283247. Two fields were missed. NumLongTermRaceInfos is a u16 array at +0x5A. NumberOfTournamentsBeaten is read into a stack local (0x28304A), not into a field.",
+    "corrected": "Add +0x5A: NumLongTermRaceInfos (u16 array). BeatHookman writes Beaten at careerData+0xAA0 + hm.dword(+4)*10 + hm.short(+8) (0x281385-0x2813A6), so it is a 2-D table with 10 entries per row, not a flat index."
+   },
+   {
+    "what": "Career money field",
+    "address": "[[0x557F0C]+0x0C]+0xACC (int32)",
+    "verdict": "holds",
+    "reason": "Seen at 0x1CFC8F 'mov ebx,[eax+0x0C]', 0x1CFCC9 'call 0x2840E0', 0x1CFCCE/0x1CFCD5/0x1CFCD7 'add' into [ebx+0xACC'], and at 0x142C31-0x142C45 (the amount comes from [ebp+0x78]). The deserialiser reads 'Money' into +0xACC through the int reader 0x291B20 (0x28301C).",
+    "corrected": ""
+   },
+   {
+    "what": "Open-race entry layout and lookup by race id",
+    "address": "0x27EFF0 / 0x27EAC0 / 0x27F010; element 0x4C",
+    "verdict": "holds",
+    "reason": "0x27EFF0 passes ecx+0xA58 to 0x27EAC0. 0x27EAC0 divides (end-begin) by 0x4C (magic 0x6BCA1AF3, sar 5), compares 'cmp si,[edx]' starting at begin+4 with 'add edx,0x4C', and returns -1 (0x27EB01) when the id is not found. 0x27F010 computes '[ecx+0xA5C] + idx*0x4C'. 0x277530 reads +0x08, +0x09 and +0x0A, and 0x283970 also uses +0x08 (city) and +0x0A (class). It is still a GUESS that careerData+0x58 is the current race id. The loss path also passes [careerData+0x58] to 0x276F50 (0x277F9E), which supports it.",
+    "corrected": ""
+   },
+   {
+    "what": "mcPgCareer::ReportRaceResult(int result)",
+    "address": "0x00277EE0",
+    "verdict": "holds",
+    "reason": "I traced all the branches. The career-only guard is at 0x277EE0-0x277EEE. The 'apply win' call 0x277530 at 0x277FE1 runs only when +0x56==0, +0x24==4 and +0x28 (the result)==0. 0x2893C0 is then called on [esi+0x10] at 0x277FE9. The caller push values are as stated (0x16A369 push 4, 0x16A732 push 3, 0x18B8CF push 2, 0x162267/0x16A95F push 5, 0x18C5DA push 6). There is one more caller that pushes 5 at 0x14304F, right after 'mov [0x53F2D4],2' at 0x14305F. 0x1C2B44-0x1C2B55 passes 0 when the local racer's +0xF5 byte (stride 0xB8, local index from 0x2694D0) is nonzero. A result of 4 while +0x24==4 takes the same path as 0 (sets +0x2C=3 and the dirty flag) but does not credit the win. Labelling 2/3/4 as 'quits' is interpretation.",
+    "corrected": ""
+   },
+   {
+    "what": "Apply race win to the career data",
+    "address": "0x00277530 -> 0x281E40 -> 0x281130; 0x281370; 0x283970",
+    "verdict": "holds",
+    "reason": "0x277547 'call 0x27EFF0' passes its result straight to 0x27F010 with no -1 check (confirmed). The hookman progress byte is incremented at 0x27759E and compared against the [0x557EE4] table at 0x2775A5. 0x2775B0 calls 0x281370, which does 'mov byte ptr [ecx],1' at 0x2813C7 and removes the entry from +0xA90 through 0x280E40. 0x2775CA calls 0x283970 on [[pgCareer+0x10]+0x20] and increments the byte at +0x36+class*7+city*2 (0x28398B-0x283992). 0x281E40 pushes (1,1,idx) to 0x281130, which calls 0x281080 at 0x281328 and then does 'inc [esi+0xA78]' (0x281338) or 'inc [esi+0xA7A]' (0x281350). When +0x0A<0 there is an extra branch, 0x27D170 then 0x28C790 on world+0x24, which the report leaves out. For co-op this matters: credit uses this machine's local OpenRaces list and the local racer index.",
+    "corrected": ""
+   },
+   {
+    "what": "Prize money award at end of race",
+    "address": "0x001CFC50",
+    "verdict": "holds",
+    "reason": "Guards seen: +0x0E at 0x1CFC56, [0x53F2D4]==2 at 0x1CFC61, [[0x557ED0]+4]!=3 at 0x1CFC73. The position is [edi+localIdx*0xB8+0xAC] (0x1CFC92 call 0x2694D0, then 0x1CFC9D). 0x285B70 and 0x2843E0 run on [pgCareer+0x14] before 0x2840E0. The amount is added to [ebx+0xACC] and the code ends with 'mov byte ptr [edi+0xE],1' at 0x1CFCFD. It is called at 0x1C2B34 before 0x1D1810. The prize uses only the local player's finishing position.",
+    "corrected": ""
+   },
+   {
+    "what": "Race end sequence in mcRaceStateDerived",
+    "address": "vtable 0x4691B8; SetState 0x1C3B70; Update 0x1C3610",
+    "verdict": "holds",
+    "reason": "Vtable 0x4691B8 contains [0x1C2C70, 0x1C22D0 (+4), 0x1C3610 (+8), ..., 0x1C3B70 (+0x18)]. SetState indexes the table at 0x1C3C28 with state-1 (0x1C3B8E), so state 7 goes to 0x1C3BCD (call 0x1C2B00) and state 11 to 0x1C3BD6 (call 0x1C33E0). Update's table at 0x1C3B1C sends state 7 to 0x1C37B9 and state 11 to 0x1C3854. From state 7, 0x1C3837 calls 0x1C2010 (true only for [[0x53F2E0]+0x18] in 0..2) and then pushes 0x0B; otherwise it pushes 8. That path is reached only when [[0x557EFC]+0x10]<0 and this is not a replay. The report's GUESS about [0x557EEC] is now CONFIRMED: 0x1C3CE0 'call 0x1C3C60' (the constructor) is followed by 'mov [0x557EEC],eax' at 0x1C3CEA, so it is the race-state object itself.",
+    "corrected": "[0x557EEC] = the mcRaceStateDerived instance (CONFIRMED, written at 0x1C3CEA after constructor 0x1C3C60)"
+   },
+   {
+    "what": "Post-race autosave",
+    "address": "0x001C33E0",
+    "verdict": "holds",
+    "reason": "I saw all the conditions in the asm. The branch to 0x19630 (state 120) needs [[0x557EFC]+0x10] >= 0, that value != [[0x557EFC]+0x18], [[0x53F2E0]+0x48] != 0 and the profile name at 0x1C3432. The dirty branch is 0x1C3479 'call 0x197F0' and then the profile name check at 0x1C3488. 0x197F0 returns 1 if [0x557648] or [[0x557F0C]+0x20] is set. The save itself is 0x1C34A0 'call 0x19360' followed by 'jmp 0x154A20'. Update state 11 (0x1C3904) then polls 0x1AB50 and dispatches on the result.",
+    "corrected": ""
+   },
+   {
+    "what": "mcMemCard singleton and the Update state machine",
+    "address": "0x004CB690; 0x0001A9E0",
+    "verdict": "holds",
+    "reason": "I decoded the byte table 0x1AABC and the jump table 0x1AAA0 from the XBE: 0 goes to 0x84600, 10 to 0x1A680, 100 to 0x1A550, 120 to 0x19660, 130 to 0x19730, and 140 sets result=3, state=0. Unknown states go to the assert at 0x448440. The completion code at 0x1AA83/0x1AA86 and the callback through [+0x334F8] with ecx=[+0x334F4] are as described. The main loop calls it at 0x1FA29/0x1FA2F. In state 100 the minimum timer exit is at 0x1A63F-0x1A670.",
+    "corrected": ""
+   },
+   {
+    "what": "Save request functions",
+    "address": "0x19360 / 0x19630 / 0x197E0 / 0x19720 / 0x197B0 / 0x197F0",
+    "verdict": "holds",
+    "reason": "The bodies match: 0x19360 sets 0x64 and returns with 'ret 0x14'; 0x19630 sets 0x78 with 'ret 0x10'; 0x197E0 sets 0x0A; 0x19720 sets 0x82 with 'ret 4'; 0x197B0 sets 0x8C. One detail is wrong. The front-end caller at 0x33FBA1 uses 'mov ecx,[esi+0x80]' (mcFeMemCard's pointer), not [0x4CB690], and it does not check +0x334B4 just before the call; its guard is 'cmp eax,0x0D'. The callers at 0x143141 and 0x1C34A0 do check +0x334B4. 0x1AB50 returns the result and clears the done flag (+0x0C).",
+    "corrected": "Caller at 0x33FBA1 uses ecx=[mcFeMemCard+0x80] and no +0x334B4 check (guard 'cmp eax,0x0D' at 0x33FB8C)."
+   },
+   {
+    "what": "Save serialisation (state 100 handler)",
+    "address": "0x0001A550",
+    "verdict": "holds",
+    "reason": "I saw every quoted line. 0x26BD10 copies 0x60D0 dwords from its argument to ecx ('rep movsd'), so the save copies 0x53F308 into memcard+0x14. The +0x60 completion value is converted with ftol 0x2DAE60 and stored at +0x18354; the city [[pgCareer+0xC]+0x50] goes to +0x18355; the 0x277250 blob goes to +0x18358, 0x61A8 bytes. 0x22040 is called at 0x1A607. A detail the report missed: '0x1A614 mov ecx,0x53F308; push 0; call 0x26BD00' runs 'mov [ecx+0x18340],al', which clears 0x557648, the profile/garage dirty byte. So a save clears both dirty flags. The result written to the caller's pointer is 0 on success and 6 on failure (0x1A610-0x1A621).",
+    "corrected": "Also note: profile dirty byte 0x557648 == 0x53F308+0x18340, cleared by 0x26BD00 at 0x1A623."
+   },
+   {
+    "what": "mcMemCard object layout",
+    "address": "[0x4CB690] + offsets",
+    "verdict": "holds",
+    "reason": "Seen: +4/+8/+0xC/+0x10 in 0x1A9E0/0x1A550; +0x14, +0x18354, +0x18355, +0x18358; +0x334B4 written by snprintf (size 0x40) at 0x1A7A7-0x1A7B0 and used at 0x1ABED; +0x334F4/+0x334F8 as the callback; +0x334FC as the device. The save list at +0x33504 has stride 0x64 (0x1A753), timestamp bytes at +0x50..+0x54 and a word at +0x56, the valid flag at +0x60 (0x1A83E-0x1A87A) and the count at +0x3350C. +0x33558/+0x3355C appear in 0x19360/0x1A550. I did not verify +0x58 being copied to [[0x53F2E4]].",
+    "corrected": ""
+   },
+   {
+    "what": "Save file names and file body",
+    "address": "0x22040 / 0x22310 / 0x2AA20 / 0x193F0",
+    "verdict": "holds",
+    "reason": "The strings are confirmed from the XBE: 0x448434 'Remix : %s', 0x448F14 '%s.mc3Remix', 0x448F20 'Remix : ', 0x448F40 'mc3', 0x448F34 'mc3Remix', 0x4A1554 '\\SaveMeta.xbx' (referenced by 0x324A2B). 0x22310 chooses between them from [ebp+0x14] at 0x22399-0x223A5, and 0x19560 passes the byte at 0x4CB694 as that argument. 0x2AA20 builds '<x>:\\' at 0x2AA40/0x2AA45 and calls 0x324A2B. 0x193F0 writes +0x10 (4 bytes), +0x14 (0x18340), +0x18354 (1), +0x18355 (1) and the 0x61A8 blob, each with checksum 0x2733E0, then 0x50A1C0/2/4/6 with sizes 1, 2, 1 and 0x4074. Calling 0x324A2B XCreateSaveGame remains a GUESS.",
+    "corrected": ""
+   },
+   {
+    "what": "Load and boot autoload",
+    "address": "0x1AB90 / 0x19560 / 0x19730",
+    "verdict": "holds",
+    "reason": "0x1AB90 calls 0x19C80, 0x1A9E0, 0x1A8A0 and 0x1A820, snprintfs the name into +0x334B4 (0x1ABED-0x1ABF6), and calls 0x19560 at 0x1AC24. 0x19560 runs read 0x22310, copies with 0x26BD10 (+0x14 into 0x53F308), calls 0x26BC60(1), deserialises with 0x277E20 (+0x18358, 0x61A8, plus the 0x4CB694 flag) and validates with 0x26CBB0. It then sets done=1 and result=0. mcFeMemCard calls it at 0x340049 with ecx=[esi+0x80]. I did not open 0x19730 itself, but the jump table confirms it is the state-130 handler.",
+    "corrected": ""
+   },
+   {
+    "what": "Global profile/garage block",
+    "address": "0x53F308 (0x18340 bytes); 0x53F80C count; 0x53F80D selected; cars 0x53F810+i*0x108",
+    "verdict": "holds",
+    "reason": "Seen: 0x14DD1E 'cmp byte ptr [0x53F80C],0x1E' inside 0x14DBB0, the function that references 'ID_Error_Too_Many_Owned' (0x45B128). 0x155944/0x15594B/0x155951 index the cars as movzx [0x53F80D], imul 0x108, add 0x53F810. 0x15525E writes the selected index and 0x15526B then sets 0x557648. 0x143120 sets 0x557648=1. The dirty byte 0x557648 lies just past the saved region (0x53F308+0x18340), so it is not saved. Each owned-car record is 0x108 bytes inside the saved block, which makes it the natural unit to send to the partner for the co-op car.",
+    "corrected": ""
+   },
+   {
+    "what": "Race result reporter 0x1D1810; game state 3 = replay",
+    "address": "0x001D1810; mcGameState [0x557ED0]",
+    "verdict": "holds",
+    "reason": "The code matches. It exits if [[0x557ED0]+4]==3 and calls ReportRaceResult only in career mode. If already reported (+0x0D), it calls it again only for results other than 0 and 1. It then calls 0x1CFD10, sets [pgCareer+0x20]=1 the first time, and sets +0x0D=1. [0x557ED0] is the mcGameState: 0x21EF0 calls the constructor 0x21E70 (vtable 0x448E64) and 0x21EFA stores it. EnterState 0x21D30 indexes with state-1, and the state-3 handler 0x212E0 sets +4=3 and calls [0x4CBAE0]->0x23D50. In the race Update, state 3 calls [0x4CBAE0]->0x23C80, which references 'EndReplay' (0x449054). 'State 3 = replay' is still a strong GUESS.",
+    "corrected": ""
+   },
+   {
+    "what": "Debug career log is dead code",
+    "address": "0x4483EC; 0x19560 / 0x1A680",
+    "verdict": "holds",
+    "reason": "In 0x19560 the snprintf (0x195BA) target is a stack local at pre-push esp+0x44, and nothing reads it before the function returns. In 0x1A680 the target at 0x1A76B is pre-push esp+0x50, while the following sprintf/snprintf calls use esp+0x10. No file API receives either buffer. The only other reference, 0x1A729, is a recompiler split entry inside 0x1A680. The strings are '%sMC_Career_log_%s.txt' and 'c:\\'.",
+    "corrected": ""
+   },
+   {
+    "what": "Career flag and race-config pointer",
+    "address": "0x53F2D4 (2 = career); 0x53F2E0",
+    "verdict": "holds",
+    "reason": "0x14304A 'mov eax,2' then 0x14305F 'mov [0x53F2D4],eax'. The guards at 0x277EE0, 0x1CFC61 and 0x1D181E all compare against 2. 0x1C2010 reads [[0x53F2E0]+0x18] and accepts 0..2. 0x1C33F7 checks +0x50 <= 1, and 0x1C3427 and 0x21326 read +0x48. The meanings of +0x48 and +0x50 are still GUESSES.",
+    "corrected": ""
+   }
+  ]
+ },
+ "verify:race-career": {
+  "checked": [
+   {
+    "what": "mcPgCareer::ReportRaceResult(int result)",
+    "address": "0x00277EE0",
+    "verdict": "holds",
+    "reason": "Re-read the asm. 277EE0..277EEE checks [0x53F2D4]==2. 277EF8 ebx=[esi+0x24]. 277F03 [esi+0x28]=result. 5 sets +0x2C=1 and 6 sets +0x2C=7. With state 4: results 1/2/3 set +0x2C=4 and call 0x276F50(word [data+0x58]) at 277F92..277FA5; result 0 (or result==state) sets +0x2C=3 and 0x276F20(city), with +0x34=0 and +0x20=1. Win credit at 277FCB..277FE9 runs only when +0x56==0, +0x24==4 and +0x28==0: 0x277530, then 0x2893C0. 278001 calls 0x2919E0, which is 'mov byte [ecx+0x5E],1'. Stats strings 0x473C74/6C/64 = k%AG/k%AF/k%AE. Returns with ret 4. The finding leaves out two calls: when +0x28 was -1 in state 4, 277F15 calls 0xCE440(result) and then 0x28FCF0; and for every result, 277FC6 calls 0x2793C0(result) on [careerData+0x10], which passes the result to registered listeners through their vtbl+0x28.",
+    "corrected": ""
+   },
+   {
+    "what": "Race result codes 0..6",
+    "address": "0x00277EE0 callers",
+    "verdict": "holds",
+    "reason": "The xref callers are 0x142E20, 0x1621E0, 0x16A340, 0x16A720, 0x16A940, 0x18B840, 0x18C5C0 and 0x1D1810. Checked each push: 162267 pushes 5 with the string 0x45D5B4 'Racers before exiting to Front End'; 16A369 pushes 4 with 0x45E2EC '...(DoQuitToCruise)'; 16A8D7 pushes 3 and calls 0x1D1810, not 0x277EE0 directly, with 0x45E364 '...(DoResetRace)'; 16A732 also pushes 3 directly; 18B8CF pushes 2 after the 0x541700/0x53F810 loop that calls 0x272010; 18C5DA pushes 6 with 0x462D40 '(ChooseGarage)'. 143064 and 16A961 also push 5. In 0x1CFD10, result 0 maps to kWIN (1CFD8E); result 1 maps to k2ND or k3RD by position +0xAC, and kTRS otherwise. 1C2B4F setz turns 'won' into 0 and 'not won' into 1.",
+    "corrected": "Restart (3) is called directly at 0x16A732 (in 0x16A720) and through 0x1D1810 at 0x16A8D7. Quit to front end (5) is also called at 0x143064 and 0x16A961."
+   },
+   {
+    "what": "Win-credit core 0x277530",
+    "address": "0x00277530",
+    "verdict": "holds",
+    "reason": "Confirmed. 27753B reads ax=[data+0x58]. 277547 calls 0x27EFF0, which wraps 0x27EAC0: a linear search over word +0x04 with a 0x4C stride that returns -1. 277553 calls 0x27F010, which computes [data+0xA5C]+idx*0x4C with no -1 check. Hookman path: 0x280900 and 0x27F0F0, then 'inc byte [group+0xC]' compared with [[0x557EE4]+city*0x50+0x34]+hm*12, and 0x281370(group) on a match. Side quest: 0x283970(rec) on [[career+0x10]+0x20]. Otherwise, when 0x27D170 is true, 0x28C790(rec). 2775F7 calls 0x281E40(idx), which calls 0x281130(idx,1,1); 281338 does inc [data+0xA78] when won, otherwise 281350 does inc [data+0xA7A]. The finding misses one call: when SideQuestIdx>=0, 27760B also calls 0x283AC0(sideQuestIdx) on [[career+0x10]+0x20].",
+    "corrected": ""
+   },
+   {
+    "what": "Unlock evaluation 0x2893C0",
+    "address": "0x002893C0",
+    "verdict": "holds",
+    "reason": "The function body is laid out after 0x288DF0 in the recomp. It runs 2893C3 call 0x288640, then 2893CA call 0x289260, then jmp 0x288DF0. 0x288DF0 calls 0x288990, then loops esi=0..3 with 0x289CE0(i), which is 0x292CD0(5,i,1). When that is true it calls 0x288A00(i), [edi+0x20].0x283F30(i) and [edi+0x24].0x28CFF0(i). Afterwards it calls 0x288AB0([[edi+0xC]+0x50]) and jumps to [mcPgCareer+0x14].0x286350. At 2886A0, 0x288640 compares word [data+0xA78] and calls 0x281E80. Not verified: the claim that 'all unlock state lives in careerData'. The sub-objects at +0x20, +0x24 and mcPgCareer+0x14 are separate objects.",
+    "corrected": ""
+   },
+   {
+    "what": "mcPgCareer object layout",
+    "address": "ctor 0x00278160, global 0x557F0C, vtable 0x473B98",
+    "verdict": "holds",
+    "reason": "27816E stores the vtable 0x473B98. 278174..27819A initialise the fields: +0x28=-1, +0x30=0x0D, +0x34 word=0. 2781A5 does mov [0x557F0C],esi. 2781CD allocates 0xCC8 and 2781E0 calls ctor 0x2834C0. The setters check out: 0x276EE0 writes +0x56 and 0x276EF0 writes +0x57; the only caller of 0x276EE0 is 0x2647C5 (push 1, in 0x264730). +0x57 gates the setup cases in 0x278270 (2782BD/2782D1/2782E8). Progress 2779DC stores +0x24=+0x2C. The 0xA8/0x17C/0x4C sub-allocations were not individually re-read.",
+    "corrected": ""
+   },
+   {
+    "what": "careerData field names from the serializer",
+    "address": "0x002829E0",
+    "verdict": "holds",
+    "reason": "Paired each string push with the following lea. 0x474274 CurrentCareerCity -> +0x50; 0x474258 CurrentStrictlyCareerCity -> +0x54; NumOpenRaces -> +0xA58 (record ctor 0x27D0A0); NumPutAsideRaces -> +0xA68; NumHistoricRaces -> +0x55C; 0x474194 CurrentCareerOrder -> +0xAC9; 0x474180 NumberOfWonRaces -> +0xA78; 0x474168 NumberOfSkippedRaces -> +0xA7A; +0xA7C before NumFillerRacesWon; 0x474138 UniqueRaceIdCounter -> +0xB18; 0x474130 'Money' -> +0xACC; 0x474120 AnnounceRace -> +0xCBE. 0x2806F0 writes +0x58 (and +0x50/+0x54) and 0x27F030 reads +0x58. The offsets for Seed (+0xB14) and Beaten (+0xAA0) were not located.",
+    "corrected": ""
+   },
+   {
+    "what": "Open-race record layout and stable key",
+    "address": "careerData+0xA5C, serializer 0x0027D350",
+    "verdict": "holds",
+    "reason": "Serializer pairs: 'UniqueId' 0x470488 -> +0x04; 'City' 0x448780 -> +0x08; 'RaceIdx' -> +0x06; HookmanIdx -> +0x09; SideQuestIdx -> +0x0A; TargetRetryScore -> +0x0C; RetryScore -> +0x10; Difficulty -> +0x14; DefaultDifficulty -> +0x18. 285B8D reads the float at +0x28. 277B11/277B15 pass rec+0x08 and rec+0x06 to 0x26B8E0. 25F2E..25F6F compares setup+0x68 strings in the online code. Not verified: the CruiseRaceName offset (+0x1C), because 27D5AA writes it into a stack buffer. Also a GUESS: that (City,RaceIdx) is unique within one open list.",
+    "corrected": ""
+   },
+   {
+    "what": "StartRace / SetupCareerRace / SetupNextCareerRace / Progress",
+    "address": "0x277990 / 0x277AE0 / 0x278270 / 0x2779D0",
+    "verdict": "holds",
+    "reason": "Confirmed. 1D916F..1D917A call 0x277990(word [rec+4]). 0x277990 sets +0x2C=4, calls 0x276F50(id) and sets +0x20=1. 0x278270 indexes the table 0x278360 by (+0x2C)-1; case 4 at 2782D1 calls 0x277AE0(word +0x34). 0x277AE0 calls 0x27EFF0/0x27F010 with no -1 check, then 0x276F50, 0x2806F0, 0x27DB00(idx), 0x26B8E0(city,raceIdx) on [0x53F2E4], and 277BD3 0x28D580(rec,setup). Progress uses table 0x277AB8; state 4 goes to 277A48, which calls EnterState(8) and then EnterState(6) on [0x557ED0]. 26883D and 264D42 also call 0x277AE0. Detail: 0x276F50 falls back to the put-aside list (0x27F0B0/0x27F0D0) when the id is not open, but 0x277AE0 and 0x2806F0 do not.",
+    "corrected": ""
+   },
+   {
+    "what": "mcRaceStateDerived EnterState/Update state numbering",
+    "address": "vtable 0x4691B8; 0x1C22D0 / 0x1C3B70 / 0x1C3610",
+    "verdict": "wrong",
+    "reason": "The vtable checks out: [1]=0x1C22D0, [2]=0x1C3610, [6]=0x1C3B70. 0x1C3B70 indexes the table 0x1C3C28 with state-1, and the cases call: 1 0x1C2320, 2 0x1C2EF0, 3 0x1C2350, 4 0x1C3290, 5 0x1C2800, 6 none, 7 0x1C2B00, 8 0x1C34F0, 9 none, 10 0x1C3580, 11 0x1C33E0, 12 0x1C2BC0, 13 0x1C2C40. 1C3C0E stores +4=+0x48. So the finding has states 8, 10 and 11 mapped wrongly. The Update table 0x1C3B1C is also indexed by state-1. State 12 (1C3A84) calls 0x278270 and 0x2779D0(0) only when race type [setup+0x18] is 1 or 3 and +0x26==0 and +0x4C==0. State 11 (1C38B1) pushes 5 to 0x1D1810. Guard 0x1C22D0: every EnterState is ignored while game state [0x557ED0]+4==6. EnterState(7) is ignored while the race state is 8, and EnterState(1) while it is 2.",
+    "corrected": "state 8 -> 0x1C34F0, state 10 -> 0x1C3580, state 11 -> 0x1C33E0"
+   },
+   {
+    "what": "Race-finished handler and 0x1D1810 wrapper",
+    "address": "0x001C2B00 / 0x001D1810",
+    "verdict": "holds",
+    "reason": "Confirmed. 1C2B34 calls 0x1CFC50. 1C2B39 calls 0x2694D0, which returns setup+0x3D8 if [setup+0x108] else 0. 1C2B44 reads byte [idx*0xB8+race+0xF5], and 1C2B4F setz turns it into the result for 1C2B55 call 0x1D1810. 0x1D1810 skips everything when game state [0x557ED0]+4==3. It calls 0x277EE0 only in career, and only when race+0x0D==0 or result is not 0/1. It always calls 0x1CFD10, then sets race+0x0D=1, and sets mcPgCareer+0x20=1 the first time. 1C2B00 also skips the money and the report when game state==3.",
+    "corrected": ""
+   },
+   {
+    "what": "Racer info entry 0xB8 and race fields",
+    "address": "race+0x98+i*0xB8; 0x1C3E80",
+    "verdict": "holds",
+    "reason": "0x1C3E80 returns [[ecx+0x65C]+i*4]. 0x1D65C0 builds the entry address as lea [idx*0xB8+race+0x98] and writes +0x04=1, +0x10=[[0x557EEC]+0xC] and +0x5D=1. 1E0752 writes [race+i*0xB8+0x9C], i.e. +0x04. 1CFC9D and 1CFDA5 read the position at +0xAC (+0x14). 1CF4F9 writes +0x14=10. 1D20FC writes word +0x34=-1. 1E16B5 clears +0x5D. The finding's 'rank-0 insertion' description of 164B72/164BA4 is wrong: those are in 0x164A80, which compares finish times through 0x164980 (min/sec/hundredth equality), so they look like tie handling. Many other race classes write +0x5D (e.g. 1D12BB, 1D8AB5, 1DE420). Offsets +0x05/+0x06/+0x07 were not individually checked.",
+    "corrected": ""
+   },
+   {
+    "what": "Checkpoints load and crossing test",
+    "address": "0x001CDC80 / 0x001CF8B0",
+    "verdict": "holds",
+    "reason": "1CDC96/1CDC9A compute idx*9<<5 = 0x120 stride. 1CDCA1 writes [race+0x24]=count and 1CDCD8 writes [race+0x28]=array. 0x1CF8B0 reads cp+0x110 (radius), cp+0x108 (height) and cp+0xFC/0x100/0x104, does the squared compares, and returns with ret 0x14 (5 args). The matrix at +0x04 and the type field at +0x11C were not re-checked.",
+    "corrected": ""
+   },
+   {
+    "what": "Finish detection to state 7",
+    "address": "0x001E06E0 (+0x1C5C30, 0x1DA070)",
+    "verdict": "holds",
+    "reason": "Confirmed. 1E0701 ORs the bit into [race+0x1258]; 1E0752 sets finished; 1E0759 increments [race+0x1250]. Online path ([0x557EFC]+0x10>=0): state 7 when mask==[net+0x14], else 6. Offline: [race+0x1250]==0x2693C0 ([setup+0x4C]) gives 7, else 6. 1E0842 calls [0x557EEC]->vtbl+4. One small error: vtbl 0x46B4B8+0x64 is 0x1E13F0, a thunk that does 'jmp 0x1E06E0'. Also, the online send through net vtbl+0x130 is taken either when 0x20240 is true or, on the other branch, only when the finishing racer is the local player (0x2694B0); it is not strictly host-only. 1C5C59 and 1DA093 send 7 through +0x130 when [net+0x10]==[net+0x18]; 1C5CB7 and 1DA0E7 call EnterState(7).",
+    "corrected": "vtbl+0x64 of 0x46B4B8 = 0x1E13F0 (jmp 0x1E06E0)"
+   },
+   {
+    "what": "Career money reward",
+    "address": "0x001CFC50",
+    "verdict": "holds",
+    "reason": "Gates: race+0x0E==0, [0x53F2D4]==2 and game state!=3. 1CFC82 calls 0x1CF440. ebp is the local entry's position (+0xAC = +0x14). The call is rewards.0x285B70(numRacers=[[0x558838]+0x28]-[[0x558814]+0x28]+1, pos). 0x285B70 takes the current record via 0x27F030 (careerData+0x58) and its float +0x28, calls 0x285B20, and stores the result in rewards+0xBC. Then 1CFCC2 calls 0x2843E0(pos), and 0x2840E0 returns rewards+0xBC, which is added to [careerData+0xACC]. Stat string 0x469B08 is 'k$CE'. 1CFCFD sets +0x0E=1. Because the position is recomputed by 0x1CF440, a partner win pays the local racer's own position.",
+    "corrected": ""
+   },
+   {
+    "what": "mcTkTournament::ReportRaceResult",
+    "address": "0x00264D80",
+    "verdict": "holds",
+    "reason": "0x470360 slot 4 is 0x264D80. Table 0x264E84 maps: 0 and 1 -> 264DA3 (inc [+0xDC], 0x263210; result 1 also calls 0x2919E0); 2 -> assert 0x4701A8; 3 -> 0x263340/0x2631B0/0x267570; 4 -> 0x264400. 5 calls 0x276EF0(0) and 0x2907E0, then 0x2907C0 or 0x2643D0 depending on 0x263660. 6 calls 0x276EF0(0), 0x2907E0 and 0x2643D0, so the finding's '6 -> 0x2643D0' leaves out the first two calls. 0x276EF0 writes mcPgCareer+0x57, not +0x56.",
+    "corrected": ""
+   },
+   {
+    "what": "Game setup structs",
+    "address": "0x53F2E4 / 0x53F2E0 / 0x53F2E8",
+    "verdict": "holds",
+    "reason": "268D00/268D29/268D52 each push 0x3E0, allocate and call ctor 0x26B9E0; the results are stored at 268D18 [0x53F2E4], 268D41 [0x53F2E0] and 268D6A [0x53F2E8]. The accessors check out: 0x2693C0 reads +0x4C, 0x2694A0 reads +0x108, 0x2694B0/0x2694D0 read +0x3D8, and 0x2693D0 returns +0x114+i*0x2C. 0x26B8E0 writes +0x68 and +0x18.",
+    "corrected": ""
+   },
+   {
+    "what": "GUESS: hook to credit the partner's win locally",
+    "address": "0x001C2B44..0x001C2B55",
+    "verdict": "holds",
+    "reason": "The chain is visible in code. If +0x5D of the local entry is 1, 1C2B4F gives 0, so 0x1D1810 calls 277EE0(0); with +0x24==4 and +0x56==0 that runs 0x277530 and 0x2893C0. 0x277530 does no -1 check after 0x27EFF0 (277547..277553), so the hook must check it. Further preconditions: race+0x0D must be 0, or 1D1833 drops result 0. Game state [0x557ED0]+4 must not be 3, or 1C2B30 and 1D181C skip. EnterState goes through the guard 0x1C22D0 (ignored while game state==6 or race state==8). Money is still paid by position (0x1CF440 recompute). Note that 0x1D65C0 sets race+0x0D=1, so it is not a usable win path. Not tested at runtime.",
+    "corrected": ""
+   }
+  ]
+ },
+ "verify:ai-traffic": {
+  "checked": [
+   {
+    "what": "Global settings object 0x3E0 bytes, three copies [0x53F2E0]/[0x53F2E4]/[0x53F2E8], ctor 0x26B9E0 with 8 slots of 0x2C at +0x114",
+    "address": "0x53F2E0 (alloc 0x268D00, ctor 0x26B9E0)",
+    "verdict": "holds",
+    "reason": "0x268D00 allocates 0x3E0 three times: 00268D18 mov [0x53F2E4],eax; 00268D41 mov [0x53F2E0],eax; 00268D6A mov [0x53F2E8],eax. Ctor 0026B9E5 lea edi,[esi+0x114]; mov ebx,8; call 0x2766C0; add edi,0x2C; dec ebx; jnz. Small correction: the 0x53F2E4 copy is allocated first (00268D00), not at 0x268D29.",
+    "corrected": ""
+   },
+   {
+    "what": "settings+0x4C = human player count, +0x50 = viewport count; split-screen and network setup in 0x13A250",
+    "address": "settings+0x4C/+0x50, 0x13A250",
+    "verdict": "holds",
+    "reason": "002693C0 returns [[0x53F2E0]+0x4C]. In 0x13A250 the counts go to the STAGING copy [0x53F2E8] (0013A261 mov edi,[0x53F2E8]; 0013A3C4 mov [edi+0x4C],edx; 0013A3CC mov [eax+0x50],edx), while pad indices go to [0x53F2E0]+0x124+i*0x2C (0013A3CF..0013A3E4). The value is cycled from the current value plus a +/- arg (idiv wrap), clamped by pad count <= 2 (0013A394). Session branch ([0x557EFC]+0x10 >= 0) and [0x50F14C] branch both write +0x4C in range 2..8 and +0x50 = 1 (0013A2E6/0013A2EE, 0013A343/0013A34C). HUD 000B6AAB/000B6AB2 confirmed.",
+    "corrected": "Writes target [0x53F2E8] (front-end staging copy), later copied to [0x53F2E0]"
+   },
+   {
+    "what": "Player slot 0x2C struct: +0x0C owned CarRecord*(0x108), +0x10 pad, +0x14 HUD number, +0x18 -1, +0x20 team, +0x26 exclude flag",
+    "address": "settings+0x114+i*0x2C",
+    "verdict": "holds",
+    "reason": "002766C2 push 0x108/call 0x271D20; 002766E5 mov [esi+0x18],-1; 002766ED mov [esi+0x0C],eax. 0x269410 returns [+0x120]+0xE3; 0x269450 returns +0x124; 0x2BD920: 002BD932 mov cl,[eax+0x26]. 0x2BDC00 reads +0x134 (edi=0x134 stride 0x2C up to 0x294) and compares to 1/2. Semantics of +0x18: player mgr 002BE186 and racer list 002C877C treat +0x18 != -1 as 'observer/spectator' slot, so it is more than 'unused' (GUESS on meaning).",
+    "corrected": ""
+   },
+   {
+    "what": "0x268E50 copies garage CarRecords (0x541700 or 0x53F810 table, index s16 at 0x53F2FE) into slot+0x120 for 2 local slots",
+    "address": "0x268E50",
+    "verdict": "holds",
+    "reason": "Confirmed 00268E6D..00268EFD (2 iterations, cmp esi,0x53F302), table choice by 0x53F2FC[i] (00268EB6), 0x272010 -> jmp 0x271E20. Nuances: settings ptr is a stack arg ([esp+0x18] after 5 pushes), not ecx; and the copy is SKIPPED unless the slot's current record string at +0xF9 is shorter than 6 chars or starts with \"blank\" (00268E83..00268EB0, strncmp with 0x45B9F0 = \"blank\"). Also 0x1843A0 and 0x142E20 copy into slot0+0x120 from 0x53F810 directly (00184422..0018442F).",
+    "corrected": ""
+   },
+   {
+    "what": "Player manager [0x558814], 0x74 bytes, vtable 0x47615C, players at +0x08[8], count +0x28; GetPlayer 0x2BD910; IsSlotRacing 0x2BD920; player 0x2EC ctor 0x2BFE50",
+    "address": "[0x558814] (0x2BE2C0, ctor 0x2BE100)",
+    "verdict": "holds",
+    "reason": "002BE2C0 push 0x74; 002BE2D5 mov [0x558814],eax. 002BE10C mov [ebx],0x47615C; 002BE119 mov [ebx+0x28],eax (0x2693C0). Loop 002BE170..002BE1FF edi+=0x2C to 0x160, mask from 0x2BD810 at [esp+0x20+i], push 0x2EC/call 0x2BFE50 args (slot, carname, pad=[+0x124], two flags), 002BE1E5 mov [edx],eax. 002BD914 mov eax,[ecx+eax*4+0x08].",
+    "corrected": ""
+   },
+   {
+    "what": "Create-mask 0x2BD810: network game requires slot+0x26==0 and session mask bit; otherwise only local slot settings+0x3D8",
+    "address": "0x2BD810",
+    "verdict": "wrong",
+    "reason": "Code: bl = (i < count). Only if settings+0x108 != 0 (002BD82E) are extra conditions applied: slot+0x26==0 (002BD83D..002BD84D) AND, if [0x557EFC]+0x10 >= 0, bit i of [[0x557EFC]+0x14] (002BD85F), else i == settings+0x3D8 (002BD869..002BD873). When settings+0x108 == 0, EVERY slot i < numPlayers gets a player (no +0x3D8 or +0x26 test). The 'only local index' case is net flag set but no session (+0x10 < 0), not the non-network case.",
+    "corrected": "mask[i] = i<numPlayers && (!s[0x108] || (slot+0x26==0 && (sess+0x10>=0 ? (sess+0x14 & 1<<i) : i==s[0x3D8])))"
+   },
+   {
+    "what": "Player car built from slot+0x120 by mcPlayerFactory (ctor 0x2CB270 vtable 0x476940, Build 0x2CBC40), stored at player+0x14",
+    "address": "0x2C0005..0x2C005E",
+    "verdict": "holds",
+    "reason": "002C0005 mov ecx,[0x53F2E0]; 002C003A mov ecx,[edx+ecx+0x120]; 002C0050 call 0x2CB270; 002C0059 call 0x2CBC40; 002C005E mov [esi+0x14],eax. Ctor: base 0x361B30 stores record at +0x54 (00361B58), 002CB2A0 vtable 0x476940, 002CB2A6 +0xE8 = slot index. Build: 002CBC6C push 0x3138, 002CBC9B call 0xF4430, 002CBCA4..002CBCBA call 0xF32A0(record,1,[esi+0xE8]).",
+    "corrected": ""
+   },
+   {
+    "what": "AI opponents use the same vehicle class 0xF4430 and record-apply 0xF32A0 via opponent factory 0x1FA970/0x1FB040",
+    "address": "0x1FA970 / 0x1FB040",
+    "verdict": "holds",
+    "reason": "001FA97F call 0x361B30; 001FA992 mov [esi],0x46C730. 001FB0A4 push 0x3138; 001FB0D6 call 0xF4430; 001FB0DF mov edx,[esi+0x54]; push -1; push 1; push edx; call 0xF32A0. xref callers of 0xF4430 = 0x1FB040, 0x2CBAE0, 0x2CBC40; callers of 0x1FA970/0x1FB040 = 0x1ED2F0 only. Record passed is desc+0x64 (001ED308).",
+    "corrected": ""
+   },
+   {
+    "what": "Race object: +0x18 numOpp, +0x2C 0x88 descriptors, +0x98+i*0xB8 player progress, +0x658 0x60 AI progress, +0x65C pointer array players then AI",
+    "address": "race (0x1CD380, 0x1D9720)",
+    "verdict": "holds",
+    "reason": "001CD39E..001CD3B2 alloc (numPlayers+[ebx+0x18])*4 -> +0x65C; 001CD3C3 lea edi,[ebx+0x98] add 0xB8 per player; 001CD400..001CD41C [ebx+0x658]+i*0x60 stored at index numPlayers+i. 001D97C9 imul 0x88 -> 001D9814 mov [ebp+0x2C],eax; 001D980A n*0x60. Note 0x98+8*0xB8 = 0x658, so exactly 8 embedded player entries.",
+    "corrected": ""
+   },
+   {
+    "what": "Opponent count = popcount of settings+0x3D4 over race file count; loader 0x1D3AE0",
+    "address": "0x26B0C0, 0x1D3AE0",
+    "verdict": "holds",
+    "reason": "001D3AF3 edi=[0x53F2E0]; 001D3B09 mov ecx,edi; call 0x26B0C0; 0026B0CF mov edx,[edx+0x3D4]; shl/test/inc. 001D3D83..001D3D98 tests bit i of +0x3D4 and skips the opponent block.",
+    "corrected": ""
+   },
+   {
+    "what": "Opponent descriptor 0x88 layout (+0x00 type,+0x01 enabled,+0x02..+0x07 cop flags,+0x09 competitor,+0x0C..+0x34 floats,+0x38..+0x44 pos/heading,+0x48 route,+0x64 CarRecord)",
+    "address": "filled in 0x1D3D60..0x1D4235",
+    "verdict": "holds",
+    "reason": "All offsets match key strings: 001D3DED [edi+0x64] record (+0x272F70(cartype)); 001D3E2B..001D3E51 posdir xyz + fpatan heading; DisabledAtStart -> +0x01 = (value<=0) (001D3E66 setle), default 1; RespawnCop +0x02, CopBehaveRam/Nudge/Block/Alongside +0x04..+0x07, AttackPlayersOnly +0x03, InitialSpeed +0x10, NonCompetitorAI -> +0x09=0 else 1, ThrottleLimit +0x0C, ModValue -> 0x271E00 on record, 001D404E cop -> [edi]=2 and +0x09=0, RubberBand Min/Max/MinThrottle/BehindMaxThrottle/MinSpeed/BehindMin/BehindMax -> +0x14/+0x18/+0x1C/+0x2C/+0x20/+0x24/+0x28, OutsideTraffic -> +0x30/+0x34 (001D41B4). Important extra: if settings+0x108 (network) is set, after RemoveAtEnd the loader jumps to the next opponent (001D3E8B..001D3EB7), so network races get no AI params/route.",
+    "corrected": ""
+   },
+   {
+    "what": "AI opponent manager [0x534074] 0x10 bytes; Init 0x1E43C0 gated by settings+0x10D; entries 0x43C init by 0x1ED2F0",
+    "address": "[0x534074] (0x1E4390, 0x1E43C0)",
+    "verdict": "holds",
+    "reason": "001E43AB mov [0x534074],eax; 001E43CB mov cl,[eax+0x10D]; jz; 001E43F0 mov [edi],edx (race+0x18); 001E440A imul 0x43C; 001E4420 push 0x1EC2D0 / call 0x120D0; 001E4440 mov [edi+0x08],ebp; 001E452F/001E4537 competitor count +0x04. Nuance: for cop car types (0x269CA0) with index < race+0x1C, the descriptor comes from a separate array race+0x20 (001E4481..001E44BA), not race+0x2C; entry+0x34 gets a team 1/2 from [0x53F2E4]+0x24 (001E44DB..001E4524).",
+    "corrected": ""
+   },
+   {
+    "what": "Opponent entry 0x43C: +0x0C racer base (0x2C8420, vtable 0x46BE80), +0x20 car, +0x54 index, +0x5C driver, +0x68 kind, +0x7C subobj, +0xDC InitialSpeed",
+    "address": "0x1EC2D0, 0x1ED2F0",
+    "verdict": "holds",
+    "reason": "001EC2DA lea esi,[edi+0x0C]; call 0x2C8420; 001EC2E9 [edi]=0x46BEA0; 001EC2EF [esi]=0x46BE80; 001EC2E4 lea ebx,[edi+0x7C]. Player ctor 002BFE5C call 0x2C8420. 001ED328 mov [esi+0x20],eax; 001ED349 mov [esi+0x54],bx; 001ED36D +0x58 = 0x1F4CA0 object; 001ED373 mov [esi+0xDC],eax (desc+0x10).",
+    "corrected": ""
+   },
+   {
+    "what": "AI driver selection in 0x1ED2F0 by race type / settings+0x48 / desc+0x00; rubber band params copied into driver +0x74..+0x94",
+    "address": "0x1ED2F0",
+    "verdict": "holds",
+    "reason": "001ED382..001ED398 race+0x10-10 <=10 via byte table 0x1ED940 + jmp [eax*4+0x1ED930]; 0x1F9EC0 kind4, 0x1F92D0 kind5, 0x1F8BC0 kind6; 001ED450 settings+0x48 -> 0x1F8680 kind7; desc+0: 0 -> 0x1F8490 (0x1BC) + 0x1E93F0(desc+0x50), 1 -> 0x1E5100 (0x258), 2 -> 0x1EF8B0 (0x23C) kind3, else 0x1EBE40 (0x1B4) kind0. Copies 001ED63A..001ED714 match. Correction to the context: the 001ED5E4 [0x53F2D4]==2 branch is CAREER mode (it calls into [0x557F0C] = mcPgCareer +0x0C via 0x27F030 and sets driver+0x18), not network.",
+    "corrected": ""
+   },
+   {
+    "what": "Rubber banding in 0x1EB540 sets throttle limit +0x28 by lerp between base +0x24 and MinThrottle/BehindMaxThrottle, scaled by [0x4B3580]",
+    "address": "0x1EB79C..0x1EB8BF",
+    "verdict": "holds",
+    "reason": "Exact asm seen: speed = [[esi+0x0C]+0xCC] vs +0x74; gap +0x20 > 0 -> t from +0x78/+0x7C, lerp +0x24 -> +0x80, result min(lerp, base); gap <= 0 -> t=(-BehindMin - gap)/(BehindMax-BehindMin), lerp +0x24 -> +0x8C capped at 1.0; speed <= MinSpeed -> +0x28 = 1.0 (001EB873). Then if [0x4B3580] > 0: +0x28 *= [0x4B3580]*[0x449004] clamped. Note speed comes from [driver+0x0C]+0xCC (the owner pointer), and 'difficulty' meaning of 0x4B3580 and sign meaning of +0x20 are GUESS.",
+    "corrected": ""
+   },
+   {
+    "what": "Racer list [0x558838] 0x2C: players then competitive AI (&opp+0x0C); no bound check; observer camera; index equals race+0x65C index",
+    "address": "[0x558838] (0x2C86E0, 0x2C8710)",
+    "verdict": "holds",
+    "reason": "002C86E0 push 0x2C; 002C8717 count=0; loop over [0x558814]+0x28 players (not 8 slots): NULL if no player (002C87D2), else player (002C87C4); non-racing with slot+0x18 != -1 -> 0x2C3FF0(firstRacer) and 0x2C5710(\"observer\" @0x476758). AI loop 002C8809 desc+0x09 -> lea ecx,[eax+0x0C] (002C8820). No bound check seen. Caveat: race+0x65C contains ALL race+0x18 AI, while this list contains only competitors, so the index equivalence breaks if a non-competitor precedes a competitor in the descriptor list.",
+    "corrected": ""
+   },
+   {
+    "what": "Race-list entry parser 0x26DA70: +0x00 RaceType,+0x04 AmbientDensity,+0x08 PedDensity,+0x0C weather,+0x0D time,+0x0F OpponentCount,+0x10 NumLaps,+0x27 CutSceneBitMask,+0x28[4] non-competitor types,+0x0E total AI",
+    "address": "0x26DA70",
+    "verdict": "holds",
+    "reason": "Time (0x44D8B8) -> 0026DAD5 [edi+0x0D]; Weather (0x469930) -> 0026DB02 [edi+0x0C]; RaceType (0x4714F0) -> 0026DB31 [edi]; AmbientDensity/PedDensity -> +0x04/+0x08; StartBeaconPosition -> +0x14 (not listed by analyst); OpponentCount -> 0026DC71 +0x0F; NumLaps -> +0x10; CutSceneBitMask -> +0x27; NonCopetitorCarTypes/CopCarTypes (|0x80 at 0026DD92) into +0x28[4] with 'PushNonCompetitiveOpponentCa...' assert; 0026DDD2..0026DDD8 sum -> +0x0E.",
+    "corrected": ""
+   },
+   {
+    "what": "Opponent display names Opponent_%02d mod 61 / OpponentTokyo_%02d; in network mode ([0x53F2D4]==2) player names from race vtable +0x5C/+0x60",
+    "address": "0x1D15B0",
+    "verdict": "wrong",
+    "reason": "Pool part holds (001D16DE mov ecx,0x3D; div; 001D16F5 city==3; 001D16FF cmp edi,0x1E; strings 0x469CC0/0x469CD0; 001D17C6 call [edx+0x0C]). But the [0x53F2D4]==2 branch (001D15E4..001D1664) names the AI racer-progress entries at race+0x658 (stride 0x60), not players, using a per-city named-racer table [0x557EE4]+city*0x50+0x2C indexed by race vtable+0x60(i). And mode 2 is CAREER, not network ([0x557F0C] = mcPgCareer, see last finding).",
+    "corrected": "In career mode ([0x53F2D4]==2) the first race->vt[0x5C]() AI entries get career named-racer names from [[0x557EE4]+city*0x50+0x2C][race->vt[0x60](i)]"
+   },
+   {
+    "what": "Traffic root [0x50152C] 12 bytes; manager loaded in place from $/resources/city/%s_traffic when settings+0x10B; vtable 0x44CE90",
+    "address": "[0x50152C] (0x6B8A0, 0x6D9F0, 0x6D4B0)",
+    "verdict": "holds",
+    "reason": "0006B8A0 push 0x0C ... mov [0x50152C],eax. 0006DA35/0006DA6E settings+0x10B; textures fx_hlight_glow/fx_hlight_star -> [edi]/[edi+4]; 0006DA85 push 0x44CF80 \"$/resources/city/%s_traffic\"; 0006DABC call 0x2105F0; 0006DAC6 mov [edi+0x08],eax. Extra gate: in-place load also requires settings+0x10F (0006DA9E); otherwise/failed -> assert 'Traffic resource missing or out of date'. vtable 0x44CE90 = 0x6D890, 0x32FE20, 0x6C840, 0x69FA0, ..., [6]=0x7C2D0 returns 'tune/traffic'.",
+    "corrected": ""
+   },
+   {
+    "what": "Ambient traffic pool: traffic+0x12C size, +0x130 array of 0x21C vehicles (ctor 0x78070), types +0x30/+0x34, +0x13C slices, +0x11C tune object; gated by [0x5587E0]+0x38",
+    "address": "0x6C840",
+    "verdict": "holds",
+    "reason": "0006C845 push 0x28/0x7F8C0 -> +0x11C; 0006C89F cmp [[0x5587E0]+0x38],bp / jz (else +0x12C=0 at 0006C967); 0006C8BF imul 0x21C; 0006C8D5 push 0x78070; 0006C8EF +0x130; type loop 0006C901..0006C963 with 0x71AC0(type,0,idx); 0006C98A /30 +1. 0x78070 sets vtable 0x44D1CC (00078094). Vehicle ctor 0xF4430 has no traffic callers.",
+    "corrected": ""
+   },
+   {
+    "what": "Race-scripted ambient vehicles race+0x788/+0x784 (stride 0xB8) added via 0x6D910 -> 0x6D7D0 to vector at traffic+0x14+0x0C",
+    "address": "0x6D910 / 0x6D7D0 / 0x6D8B0",
+    "verdict": "holds",
+    "reason": "001CDB3F movzx edx,[esi+0x788]; call 0x6D8B0; 001CDB59 call 0x6D910. 0006D933 movzx esi,[ebp+0x788]; 0006D990 [ebp+0x784]+edi; 0006D9B2 add edi,0xB8; 0006D9A6 lea ecx,[ebx+0x14]; call 0x6D7D0. 0006D7D6 [edi+0x10]==0 -> assert 0x44CEC8 'Ambient Vehicles is not suported for no traffic option'; 0006D7F1 grow by 8 (0x6D620); 0006D837 imul 0x21C. Also 0x6D910 grows a 0x30-stride vector at traffic+0x0C per vehicle.",
+    "corrected": ""
+   },
+   {
+    "what": "aiCurveCatrom one of 3 curve types fixed up by 0x35AAC0 from loader 0xEED70",
+    "address": "0x35D1D0, 0x35CDD0, 0x35AAC0",
+    "verdict": "holds",
+    "reason": "0035AB10 type byte: 2 -> 0x35D1D0, 1 -> 0x35CAF0, 0 -> 0x354580. 0035D1DE mov [esi],0x4A489C. Assert string 0x4A48C0 pushed at 0035CDE8 (code at 0x35CDD0 is indexed under function 0x35D1C0 by the recompiler). Callers of 0x35AAC0 = 0xEED70.",
+    "corrected": ""
+   },
+   {
+    "what": "[0x53F2D4] == 2 means online/network game; settings+0x108 network flag; settings+0x3D8 local slot",
+    "address": "0x53F2D4, settings+0x108, settings+0x3D8",
+    "verdict": "wrong",
+    "reason": "[0x557F0C] is the mcPgCareer singleton: ctor 002781A5 mov [0x557F0C],esi, and every caller of mcPgCareer::ReportRaceResult 0x277EE0 (asserts at 0x473C7C) passes ecx=[0x557F0C] (0016225E, 0016A72C, 0018C5D4, 001D183C...). [0x53F2D4]=2 is written in 0x142E20 (00142EC5) and 0x1843A0 (00184441) right after copying slot0's car from 0x53F810 and setting players=viewports=1, then calling mcPgCareer methods (0x278270, 0x2779D0, 0x277BF0). So 2 = career mode. 0x13A400 sets 0 when settings+0x18==0 else 1. settings+0x108/+0x3D8 part: 0x2694D0 returns +0x3D8 only if +0x108 (confirmed), and +0x108 gates the session-mask test in 0x2BD810 and the AI-param skip in 0x1D3E8B, so 'network flag' is plausible but still a GUESS.",
+    "corrected": "[0x53F2D4]==2 = career mode; [0x557F0C] = mcPgCareer singleton"
+   },
+   {
+    "what": "Settings flags defaults 0x4B36B1..B4: +0x10B traffic, +0x10D AI opponents; +0x10A/+0x10C/+0x10E unknown",
+    "address": "settings+0x10A..+0x10E",
+    "verdict": "holds",
+    "reason": "00268FA2 [0x4B36B1] -> [0x53F2E4]+0x10B; 00268FB3 [0x4B36B3] -> +0x10D; 00268FC4 [0x4B36B2] -> +0x10C; 00268FD6 [0x4B36B4] -> +0x10E (all defaults = 1). Written to the 0x53F2E4 copy. 0006DA6E uses +0x10B for traffic; 001E43CB uses +0x10D for opponents. Additional: +0x10F gates the traffic resource load (0006DA9E).",
+    "corrected": ""
+   }
+  ]
+ },
+ "verify:player-car": {
+  "checked": [
+   {
+    "what": "Player manager singleton and player array (GetPlayer)",
+    "address": "global 0x558814; player[i] = [mgr+0x08+4*i]; GetPlayer 0x2BD910",
+    "verdict": "holds",
+    "reason": "0x2BE2C0 push 0x74/call 0x1B3B90/call 0x2BE100/0x2BE2D5 mov [0x558814],eax. 0x2BE10C mov dword ptr [ebx],0x47615C. Ctor loop 0x2BE170-0x2BE1FF: edi steps 0x2C up to 0x160 (8 slots), eax walks ebx+0x08 step 4, 0x2BE1AE push 0x2EC, 0x2BE1D0 call 0x2BFE50, 0x2BE1E5 mov [edx],eax. 0x2BD910 mov eax,[ecx+eax*4+0x08]; ret 4. 0x2BF570 wraps with ecx=[0x558814]. Also: mgr+0x28 = player count (0x2BE119, from 0x2693C0), used as the loop bound in Update at 0x2BE08C. Ctor args passed per player (0x2BE1C9-0x2BE1CD): arg1 = index, arg2 = 0x269410(i) = car name, arg3 = [cfg+0x124+0x2C*i] (slot+0x10).",
+    "corrected": ""
+   },
+   {
+    "what": "Local player index helper and network flag; per-player config slot",
+    "address": "0x2694D0; cfg=[0x53F2E0]: +0x108 isNetwork (0x2694A0), +0x3D8 local net slot (0x2694B0), +0x4C count (0x2693C0), slot = cfg+0x114+0x2C*i (0x2693D0), slot+0x18 pad port",
+    "verdict": "holds",
+    "reason": "All helpers match the asm exactly (0x2694D0: mov cl,[eax+0x108]; jz -> xor eax,eax; else mov eax,[eax+0x3D8]). 0x2BE09B call 0x2694D0; 0x2BE0A2 mov eax,[edi+esi*4+0x08]. 0x2C99DA call 0x2693D0; 0x2C99DF mov ebp,[eax+0x18]; cmp ebp,-1 -> no pad mapper ([esi+0x64]=0). Additional fields seen: slot+0x0C = pointer to the player's car record (0x269410 returns [slot+0x0C]+0xE3 = car name string); slot+0x26 byte (0x430 returns slot+0x26); slot+0x10 dword passed to factory+0xEC (-1 and not network -> no input object, 0x2CB32B).",
+    "corrected": ""
+   },
+   {
+    "what": "mcPlayer -> vehicle pointer (player+0x14); ctor/vtable; player+0x54 view object",
+    "address": "mcPlayer ctor 0x2BFE50 (0x2EC bytes, vtable 0x476498), player+0x14 vehicle, player+0x54 object with +0x58 index/+0x04 player",
+    "verdict": "holds",
+    "reason": "0x2BFE69 mov dword ptr [esi],0x476498. 0x2C0050 call 0x2CB270 (factory ctor, writes vtable 0x476940 at 0x2CB2A0) on a stack object; 0x2C0059 call 0x2CBC40 on the same object; 0x2C005E mov [esi+0x14],eax. 0x2BE041 mov esi,[ecx+0x14]; 0x2BE071 mov ecx,[esi+0x08]; movss [ecx+0x70],0; 0x2BE087 movss [edx+0x74],[0x447E50]=0.1 (only for the local slot in a network game, when a flag at [[0x50F148]+0xC]+0x130]+0x44 bit0 is set). 0x2C3FF0: [esi+0x58]=idx; [esi+0x04]=GetPlayer(idx); called on [player+0x54] at 0x2BDF8E and 0x2C878D. player+0x54 is created at 0x2C0107 call 0x2C70E0 -> 0x2C010F. Calling it a camera is a guess (not refuted). Important detail for the coop goal: factory ctor args from mcPlayer (0x2C002C-0x2C004B): a1 = car name (mcPlayer arg2) -> strcpy into factory+0x04 (0x376600), a3 = player index -> factory+0xE8, a4 = [cfg+0x114+0x2C*i+0x0C] (car record) -> factory+0x54 (0x361B58), a6 = slot+0x10 -> factory+0xEC.",
+    "corrected": ""
+   },
+   {
+    "what": "Vehicle object layout built by mcPlayerFactory",
+    "address": "vehicle ctor 0xFF160 (0x6C bytes, vtable 0x454F40); +0x04 input, +0x08 car, +0x0C model, +0x10 audio, +0x14, +0x1C phInst, +0x4C car data, +0x50 sim/tuning, +0x5D player index",
+    "verdict": "holds",
+    "reason": "0x2CBDE2 push 0x6C; 0x2CBDF4 call 0xFF160; 0xFF16E mov dword ptr [esi],0x454F40; vtable = 0x100D70,0xFFC50,0xFFD90,0xFFA70. 0xFF169 push 0xE0 / 0xFF184 call 0x121550 (writes vtable 0x456550 at 0x12164B) / 0xFF18D mov [esi+0x50],eax. 0x2CBE16 mov [esi+0x4C],eax (factory+0x4C). 0x2CBE24 mov [esi+0x5D],al with al=[factory+0xE8] = player index. 0x2CBE48 vtable 0x46C750 (base 0x35E070 -> 0x2A4A60), 0x2CBE53 mov [ebp+0x40],esi, 0x2CBE56 mov [esi+0x1C],ebp, 0x2CBE79 mov [edi+0x44],esi; 0x361B80 returns [ecx+0x44]. Sub-objects: 0x2CB385 (+0x04, via 0x2C89F0), 0x2CB3C9/0x2CB3CE (+0x08 car built by 0x120930, vtable 0x4564F0), 0x2CB5D9 push 0x49C / 0x2CB64D (+0x0C), 0x2CB68A push 0x4C / 0x2CB6B7 (+0x14, 0x102210), 0x2CB901 push 0x84 / 0x2CB924 call 0x10AC20 / 0x2CB964 (+0x10). MISSING from the finding: vehicle+0x64 = factory+0x54 = the player's car record (0x2CBE2B/0x2CBE30) and vehicle+0x68 = factory+0x50 = 0x3138-byte car customization instance from 0xF4430 (0x2CBE73/0x2CBE76). Reset (0xFFC50) re-applies [vehicle+0x64] to car data (0xFFC95 call 0x103A50) and to the sim/tuning object (0xFFCC1 call 0x121970 with [esi+0x64]). VehicleManager::Update passes [vehicle+0x64] to 0xF96C0 every frame (0xFF021).",
+    "corrected": "add: vehicle+0x64 = car record (cfg slot+0x0C), vehicle+0x68 = 0x3138-byte customization object (0xF4430)"
+   },
+   {
+    "what": "Car world transform: phInst Matrix34 at inst+0x10 (pos +0x34), inst = [vehicle+0x1C]",
+    "address": "inst+0x10..+0x3F, row1 (up) at +0x1C, pos +0x34; inst+0x08 word level index",
+    "verdict": "holds",
+    "reason": "0xFEFA0-0xFF01B: ecx=[mgr+0x08][i] (vehicle), eax=[ecx+0x1C], copies [eax+0x10]..[eax+0x3C] (12 dwords) into [mgr+0x94][i]+0xA0..+0xCC. 0x2A38BA-0x2A390A copies 12 dwords from [collider+0x14] to [collider+0x04]+0x10. 0x123B99: mov eax,[esi+0x04] (car->vehicle); mov ecx,[eax+0x1C]; movss xmm0,[ecx+0x20] clamped to >=0 (row1.y = up.y). 0x1E9340 returns [..+0x1C]+0x34. 0x2A4A6D mov word ptr [eax+0x08],0xFFFF in the phInst base ctor 0x2A4A60 (vtable 0x475508), used as a level index at 0xA25A1 movzx ebx,word ptr [eax+0x08]. Row 0/2 names remain a guess; 0x8C2C0 rotates x/z about Y, which fits rows being right/up/forward.",
+    "corrected": ""
+   },
+   {
+    "what": "Rigid body: velocities, mass, matrix; car -> collider -> body",
+    "address": "collider=[car+0x68] (vtable 0x4754D4); body=[collider+0x10] (vtable 0x4A33F8): +0x04 mass, +0x0C inertia, +0x2C momentum, +0x44 linvel, +0x50 angvel, +0x5C Matrix34 (pos +0x80)",
+    "verdict": "holds",
+    "reason": "0x3432B0: [ecx+0x44..0x4C]=v; [ecx+0x2C..0x34]=v*[ecx+0x04]. 0x343300: [esi+0x50..0x58]=w, then uses [esi+0x0C]*[esi+0x5C]. 0x342AC0 is body vtable 0x4A33F8 slot +0x38; computes p-[ecx+0x80..0x88] and w x r with [ecx+0x50..0x58]. 0x2A459E mov [esi+0x10],eax; 0x2A3349 mov [esi+0x04],eax; 0x2A3395 add edx,0x5C; mov [esi+0x14],edx. 0xA264C mov [esi+0x68],ebp. 0x35E0D0: [inst+0x40]->[+0x08]->[+0x68]-> jmp 0x2A3CD0 -> [collider+0x10] jmp [vtable+0x38]. Collider vtable 0x4754D4 slot +0x08 = 0x2A38A0.",
+    "corrected": ""
+   },
+   {
+    "what": "Car speed scalar",
+    "address": "car+0xB0",
+    "verdict": "holds",
+    "reason": "0x330500 (slot +0x08 of 0x4A1E18): edx=[ecx+0x68]; eax=[edx+0x10]; sqrt of the squares of [eax+0x44/0x48/0x4C]; 0x330529 fstp [ecx+0xB0]. 0x2C9EBA mov eax,[esi+0x34]; 0x2C9EBD mov ecx,[eax+0xB0]. Note that 0x4A1E18 is a base vtable. The real car vtable is 0x4564F0 (0x120963), and its slot +0x08 is 0x123B90, not 0x330500.",
+    "corrected": ""
+   },
+   {
+    "what": "Per-frame control inputs on the car",
+    "address": "car+0x6C steer, +0x70 throttle, +0x74 brake, +0x78 handbrake, +0x7C claimed 'input flags' = input+0x54",
+    "verdict": "wrong",
+    "reason": "Steer, throttle, brake and handbrake hold (0x2CA4E2 [ecx+0x6C]=[esi+0x18], 0x2CA4EE [ecx+0x70]=[esi+0x0C], 0x2CA4FA [ecx+0x74]=[esi+0x10], 0x2CA506 [ecx+0x78]=[esi+0x14]; 0x2C96F7-0x2C971B is the same in the network path). car+0x7C is wrong. 0x2CA4D4 does mov edx,[edi], and on every path that reaches it edi = esi+0x1C (0x2CA341/0x2CA376 lea edi,[esi+0x1C]; 0x2CA379 movss [edi],xmm0). The only jump into that range comes from 0x2CA2F2 -> 0x2CA373, which also sets edi. The earlier edi=esi+0x54 at 0x2C9BF5 is overwritten (0x2C9EB0 xor edi,edi). The network path 0x2C96F4 confirms it: mov edx,[esi+0x1C]; mov [ecx+0x7C],edx. So car+0x7C = input+0x1C, a float that is smoothed through 0x5FAD0 and is not a flags dword. input+0x54 is the argument passed to car 0x1210F0 (0x2CA4BF/0x2CA4C9 and 0x2C96E5/0x2C96EC), which is a car mode value, not flags. Gear: 0x2CA3C0 mov ecx,[eax+0x14]; mov dx,[ecx+0x14] holds; 0xADAC0/0xADAF0 are triggered by button bits 0x100/0x200 (0x2C972C/0x2C973E).",
+    "corrected": "car+0x7C = input+0x1C (float, meaning unknown); input+0x54 = mode argument to car 0x1210F0"
+   },
+   {
+    "what": "mcPlayerInput object and its update",
+    "address": "ctor 0x2C9970 (vtable 0x47684C, base 0x35F230/0x4A4B18), Update 0x2C9AA0 (slot +0x1C) via 0x360200 (slot +0x08); +0x34 car, +0x50 vehicle, +0x60 slot, +0x64 pad mapper",
+    "verdict": "holds",
+    "reason": "Vtable 0x47684C: +0x08=0x360200, +0x1C=0x2C9AA0; base 0x4A4B18: +0x08=0x360200, +0x1C=0x35F780. 0x360222 mov eax,[esi]; call [eax+0x1C]. 0x2C89F0: 0x35F2C0 sets [this+0x34]=[vehicle+0x08] and [this+0x30]=car data arg; 0x2C8A0F mov [esi+0x50],edi. 0x2C9A0D mov [esi+0x60],edi; 0x2C9A00 call 0x2CA770 -> 0x2C9A09 mov [esi+0x64],eax. Pad table imul 0x38 / lea 0x4AFD90 at 0x2C9B28/0x2C9B3E. One correction from the previous finding: +0x54 is not a flags field.",
+    "corrected": ""
+   },
+   {
+    "what": "Built-in network input replication packet",
+    "address": "0x2C9570, packet at input+0x6C..+0x77, +0x78 valid",
+    "verdict": "holds",
+    "reason": "0x2C9580 call 0x2694B0; cmp eax,[esi+0x60]. Local branch: [esi+0x70..0x72] = throttle/brake/handbrake*255 (0x447C08=255.0); 0x2C95D6 [esi+0x73] = steer*127 (0x44AC74=127.0); 0x2C95DC [esi+0x74] = gear low byte; 0x2C9603/0x2C9613 [esi+0x75]/[esi+0x76] = [esi+0x20]/[esi+0x24]*127; 0x2C961F [esi+0x77] = [esi+0x54] byte; [esi+0x6C] = button bits [esi+0x28] (ORed while valid), with the top byte set to [[vehicle+0x44]+0x3C]+1. 0x2C9642 sets valid. Correction: the unpack at 0x2C965F-0x2C971B is not remote-only. The local branch also jumps there (0x2C9646 jmp 0x2C965F), so both sides run on the quantized values. The remote branch needs [esi+0x78]!=0 and copies [esi+0x6C]&0xFFFFFF into +0x28 (0x2C9653-0x2C965C). input+0x1C, the source of car+0x7C, is NOT in the packet. 0x2CA4B2-0x2CA4B9 skips the direct writes when network is set, then calls 0x2C9570 at 0x2CA60E.",
+    "corrected": "unpack 0x2C965F-0x2C971B runs for local and remote slots; input+0x1C (car+0x7C) not transmitted"
+   },
+   {
+    "what": "Teleport/reset-to-pose on the car",
+    "address": "car+0x80 pos (0x3305F0), +0x8C angles (0x330610), +0x98 linvel, +0xA4 angvel; car vtable+4 Reset = 0x124520 -> 0xA2460",
+    "verdict": "holds",
+    "reason": "0x3305F0 add ecx,0x80; 0x330610 add ecx,0x8C. Car vtable 0x4564F0 (set at 0x120963) slot +4 = 0x124520, which calls 0xA2460 first (0x124523). 0xA2556 lea eax,[esi+0x80]; 0xA2568 lea ecx,[esi+0x8C]; 0xA2583 call 0x87310. 0xA2588 edi=[0x5580F0]; 0xA2599 [[esi+0x04]+0x1C]; 0xA25A1 movzx ebx,word [eax+0x08]; 0xA25E1 call [eax+0x8C](ebx,&mtx). This runs only when the level state byte is 1 or 5 (0xA25B3), with an optional [edi+0x84] call. 0xA25FB SetVelocity([esi+0x98]); 0xA2609 SetAngVelocity([esi+0xA4]). Cruise reset 0x2C1AAC call 0x3305F0; 0x2C1AC0 heading*0x44C3F4 (=0.0174533); 0x2C1AE1 call 0x122770; 0x2C1AEE call [edx+0x04].",
+    "corrected": ""
+   },
+   {
+    "what": "Place-on-ground and racer start-position API",
+    "address": "0x122770; racer +0x14/+0x18/+0x24; 0x2C8860 SetStartPosition(vec4*, bool liftByCarHeight); 0x2C8610; 0x2C8690; 0x2C19B0",
+    "verdict": "wrong",
+    "reason": "Most of it holds: 0x1227FE call [edx+0x58]; 0x122A26/0x122A32 calls; 0x2C8646/0x2C8670/0x2C867B; 0x2C869A call 0x2C8610, 0x2C86A4 call [eax+0x04]; 0x2C8931-0x2C8954 stores, 0x2C8959 call 0x2C8610; the racer base vtable 0x476738 (0x2C842B) has slot +0x1C = 0x2C8690; mcPlayer vtable +0x1C = 0x2C19B0, which calls 0x2C8690 at 0x2C19C4. The bool meaning is wrong. When it is set (0x2C88BD-0x2C8925), the vector (0,0,0.5*[d+0x1C]-[d+0x28]) with d=[[vehicle+0x4C]+0x0C] is rotated about Y by the heading (0x8C2C0 = sin/cos on x/z) and added to the position. That moves the car forward along its heading by a length-based offset; it does not lift it. Callers of 0x2C8860 also include 0x1CBDAA.",
+    "corrected": "0x2C8860(vec4* posHeading, bool offsetAlongHeadingByCarLength)"
+   },
+   {
+    "what": "Main loop and per-frame world step",
+    "address": "0x12440 -> 0x1F9D0 -> 0x1EDB0 -> 0x29D210 [0x558120] and 0x2BDEC0 [0x558814] -> VehicleManager [0x5638E4] slot +0x10 = 0xFEF80 -> vehicle Update; present 0x2D5460 -> 0x2D2990 -> 0x4187A0",
+    "verdict": "holds",
+    "reason": "0x128A6 call 0x1F9D0 (callers of 0x1F9D0: 0x12440, 0x126C8). 0x1FA3F-0x1FA51: eax=[[0x557ED0]+4]-1; jmp [eax*4+0x1FEDC]. 0x1FB76 call 0x1EDB0, 0x1FAD9 call 0x2D5460. 0x1EEC3/0x1EEC9 phSim; 0x1EE94/0x1EEF7 call 0x2BDEC0. 0x29D210 loops [esi+0x14] times calling vtable +0x08/+0x0C/+0x10 and calls 0x20BA30. The dt global 0x4B2D48 is runtime data, so the 1/60 value was not checked statically. 0x2BDFFF call [edx+0x14] and 0x2BE0E5 call [edx+0x10] on [0x5638E4]; 0xFEF80 is in the vtable at file offset 0x451834 (VA 0x454F14), consistent with slot +0x10. 0xFEF85 call 0x35DA80; 0x35DA98 call [edx+0x08]. 0x2D5460 is among the callers of 0x2D2990, and 0x2D2A3A call 0x4187A0 = D3DDevice_Swap (game.toml line 155).",
+    "corrected": ""
+   },
+   {
+    "what": "Collider per-step update copies body pose into phInst",
+    "address": "collider vtable 0x4754D4 slot +0x08 = 0x2A38A0",
+    "verdict": "holds",
+    "reason": "Vtable dump: 0x4754D4+8 = 0x2A38A0. 0x2A38A8 call [eax+0x24] on [esi+0x10]; 0x2A38AD call 0x2A37B0, which compares [esi+0x14] with body+0x5C and applies the centroid offset from [esi+0x0C]+0x2C..0x34; 0x2A38B7 call [edx+0x50] on the inst; 0x2A38C0-0x2A390A copies 12 dwords from [esi+0x14] to [esi+0x04]+0x10.",
+    "corrected": ""
+   },
+   {
+    "what": "Car customization object passed into the vehicle build (link to the player's own car)",
+    "address": "claimed: factory+0x50 = 0x3138 config (0xF4430), factory+0x54 = custom data (0xF32A0), factory+0x4C = car data (0x105B80); evidence at 0x2CBB15..0x2CBB6F",
+    "verdict": "wrong",
+    "reason": "The cited addresses are in 0x2CBAE0, a different build routine whose only caller is 0x13C8E0 (a non-player path, likely a showroom/preview). It is not the mcPlayer path. The mcPlayer path is Build 0x2CBC40: 0x2CBC51 call 0x26A6A0(factory+0x04 = car name, looked up in [0x557EB0] stride 0x28); 0x2CBC6C push 0x3138; 0x2CBC9B call 0xF4430; 0x2CBCA9 mov [esi+0x50],eax; 0x2CBCBA call 0xF32A0(record=[esi+0x54],1,[esi+0xE8]). Car data comes from vtable slot +0x20 = 0x2CB2D0: 0x2CB30F call 0x105B80(factory+4, [esi+0x54], [esi+0x50], 0, 0, isRemote) -> 0x2CB314 mov [esi+0x4C],eax. isRemote is set when the game is networked and [esi+0xE8] is not the local slot. The link the finding guessed at is now confirmed in code: factory+0x54 = [cfg+0x114+0x2C*i+0x0C] (0x2C0037-0x2C003A with ecx=[0x53F2E0] from 0x2C0005, passed as factory ctor a4 and stored at 0x361B58). Its +0xE3 is the car name string (0x269410 / 0x269424), and the name becomes factory+0x04 through mcPlayer arg2 and 0x376600. The record is applied by 0xF32A0, which uses the mask at +0x08 (&0x3F7F) and bytes at +0x18/+0x19/+0x1C.., and again on every vehicle Reset (0xFFC95 0x103A50, 0xFFCC1 0x121970) and per frame (0xFF021 -> 0xF96C0 -> 0xF32A0). Whether this record is exactly the career-save garage entry with parts, paint and vinyls is still a GUESS.",
+    "corrected": "player path: Build 0x2CBC40 (0x2CBC6C/0x2CBC9B/0x2CBCA9/0x2CBCBA) + slot 0x2CB2D0 (0x2CB30F/0x2CB314); car record = [0x53F2E0]+0x114+0x2C*playerIdx+0x0C (name at record+0xE3) -> factory+0x54 -> vehicle+0x64"
+   }
+  ]
+ }
+}

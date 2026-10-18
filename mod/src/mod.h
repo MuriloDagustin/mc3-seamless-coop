@@ -21,6 +21,7 @@ std::wstring ExeDir();
 std::string Env(const char* name);
 bool Mapped(uint32_t va, uint32_t bytes);  // every page committed and readable
 HWND GameWindow();
+std::string HostFind(uint32_t value, int max);  // the runner image's copies of a dword (hostscan.cpp)
 bool PatchImport(const char* dll, const char* name, void* to, void** old);  // in the runner's import table
 void FakeFocus();
 void FakeKeys();                 // test copies: GetAsyncKeyState/GetKeyState answer the channel's keys
