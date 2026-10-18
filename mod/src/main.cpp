@@ -3,6 +3,9 @@
 // The Xbox address space is flat in the runner: host = guest base + Xbox VA (the XBE header at VA 0x10000).
 #include "mod.h"
 #include "overlay.h"
+#include "guest_poll.h"
+#include "race.h"
+#include <intrin.h>
 
 #include <audiopolicy.h>
 #include <mmdeviceapi.h>
@@ -173,19 +176,44 @@ static DWORD VirtualState(DWORD user, XINPUT_STATE* state) {
     return ERROR_SUCCESS;
 }
 
+namespace {
+bool GuestInputContext(uintptr_t returnAddress) {
+    if (!mod::game::GuestInputReturn(returnAddress)) return false;
+    static const bool verified = [] {
+        const auto* base = reinterpret_cast<const uint8_t*>(GetModuleHandleW(nullptr));
+        if (reinterpret_cast<uintptr_t>(base) != mod::game::kRunnerBase) return false;
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0 || dos->e_lfanew > 0x100000) return false;
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+        if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+            nt->OptionalHeader.SizeOfImage < mod::game::kInputCallOffset + 6) return false;
+        return mod::game::GuestInputBuild(reinterpret_cast<uintptr_t>(base), nt->FileHeader.TimeDateStamp,
+                                          nt->OptionalHeader.SizeOfImage, base + mod::game::kInputCallOffset);
+    }();
+    return verified;
+}
+}  // namespace
+
 extern "C" DWORD WINAPI ProxyXInputGetState(DWORD user, XINPUT_STATE* state) {
     g_xinput_calls++;
-    if (user == 0) mod::game::FiberTick();
-    if (mod::control::Enabled()) return VirtualState(user, state);
-    auto f = REAL(DWORD(WINAPI*)(DWORD, XINPUT_STATE*), "XInputGetState");
-    DWORD r = f ? f(user, state) : ERROR_DEVICE_NOT_CONNECTED;
+    const bool guest = GuestInputContext(reinterpret_cast<uintptr_t>(_ReturnAddress()));
+    if (guest) mod::game::FiberTick();
+    DWORD r;
+    if (mod::control::Enabled()) r = VirtualState(user, state);
+    else {
+        auto f = REAL(DWORD(WINAPI*)(DWORD, XINPUT_STATE*), "XInputGetState");
+        r = f ? f(user, state) : ERROR_DEVICE_NOT_CONNECTED;
+    }
+    // The guest overwrites model+0x132 from this input later in the frame. Supply the actual
+    // headlight button as well, so the ordinary marker challenge survives that update.
+    if (guest && user == 0 && r == ERROR_SUCCESS && state && mod::race::ChallengeInput())
+        state->Gamepad.wButtons |= XINPUT_GAMEPAD_RIGHT_SHOULDER;
     mod::game::Pad(user, r == ERROR_SUCCESS ? state : nullptr);
     return r;
 }
 
 extern "C" DWORD WINAPI ProxyXInputGetStateEx(DWORD user, XINPUT_STATE* state) {  // ordinal 100: with the guide button
     g_xinput_calls++;
-    if (user == 0) mod::game::FiberTick();
     if (mod::control::Enabled()) return VirtualState(user, state);
     auto f = REAL(DWORD(WINAPI*)(DWORD, XINPUT_STATE*), MAKEINTRESOURCEA(100));
     DWORD r = f ? f(user, state) : ERROR_DEVICE_NOT_CONNECTED;

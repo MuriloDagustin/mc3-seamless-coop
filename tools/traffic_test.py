@@ -30,7 +30,9 @@ def main():
     seconds = int(sys.argv[1]) if len(sys.argv) > 1 else 10
     h, p = Copy(45703, timeout=20), Copy(45704, timeout=20)
     time.sleep(seconds)
-    print("partner:", p.command("state").split("traffic=")[1])
+    for name, copy in (("host", h), ("partner", p)):
+        status = copy.command("state")
+        print(name + ":", "traffic=" + status.split("traffic=", 1)[1] if "traffic=" in status else status)
     hn, hs = pool(h)
     pn, ps = pool(p)
     host_active = {i: v for i, v in hs.items() if v[3]}

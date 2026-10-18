@@ -5,7 +5,8 @@
 // - the partner's start: that race put in its open list if missing, the marker filter passed, its car taken into the
 //   race's start marker, so its own game starts the same race;
 // - a win for both: a copy whose player won tells the others, who mark their local racer won before the race ends;
-// - a partner gone mid race: forfeited in this world, so the local player can still finish.
+// - remote racers have no HUD/camera and are completed locally before the local player finishes.
+//   Their real victory/prize arrives over the network; disconnects never count them a second time.
 #include <cstdint>
 #include <string>
 
@@ -20,17 +21,24 @@ struct Start {
     uint8_t record[0x4C];  // the host's open-race record (prize, opponents, difficulty...)
     char name[32];
 };
+struct Finished {
+    uint32_t serial;
+    uint8_t won, dnf;  // terminal result BEFORE any shared-win override or payment
+};
 #pragma pack(pop)
 
-// game thread (the xinput hook) or, without one, the mod's tick
+// Game thread only (the verified xinput hook); includes a human-finish counter read/modify/write.
 void Tick(bool hosting, bool connected);
+// Only merge into a successful, verified guest poll of controller 0, after reading the real/test pad.
+bool ChallengeInput();
 
 // session thread: what came from the others, what goes to them
 void OnStart(const Start& s);
 void OnPartnerWon(uint32_t serial, int32_t prize);  // prize 0: not paid yet
-void OnPartnerGone();
 bool TakeStart(Start& out);       // the host's start to send (once per start)
 bool TakeWon(uint32_t& serial, int32_t& prize);  // this copy's player won (again with the prize once paid)
+void OnPartnerFinished(const Finished& finished);
+bool TakeFinished(Finished& out); // periodically retransmitted, including losses (no ACK dependency)
 std::string Describe();           // for the test channel
 std::string GoToOpenRace(int index);  // test: the local car into that open race's start marker (no index: the list)
 

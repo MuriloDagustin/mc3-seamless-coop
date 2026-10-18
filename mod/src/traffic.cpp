@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "mod.h"
+#include "car.h"
 
 namespace mod::traffic {
 
@@ -81,9 +82,38 @@ struct Remote {
 std::vector<Remote> g_remote;
 uint32_t g_host_layout = 0, g_mismatch_logged = 0;
 uint32_t g_tm = 0;  // the pool the puppets belong to
-std::vector<uint8_t> g_puppet;  // slots this mod took over (unlinked)
+uint32_t g_slots = 0;
+struct Puppet { uint32_t road = 0, next = 0; uint16_t handle = 0xFFFF; bool owned = false; };
+std::vector<Puppet> g_puppet;
 int g_shown = 0, g_hidden = 0, g_frames = 0;
 bool g_active = false;
+
+bool Playable() {
+    uint32_t machine = P(0x557EEC), game = P(0x557ED0);
+    int state = int(P(machine + 4));
+    return state >= 5 && state <= 6 && P(game + 4) != 3 && car::InPlay();
+}
+
+// Reset skips a car with no road, no script and no trailer. Relink our cars BEFORE that
+// reset, otherwise renderer clearing leaves used pool slots with handle FFFF forever.
+// Never restore an old road into a new pool or a reallocated renderer object.
+void Release(const Pool& p) {
+    if (p.tm == g_tm && p.slots == g_slots && int(g_puppet.size()) == p.n) {
+        for (int i = 0; i < p.n; i++) {
+            const Puppet& saved = g_puppet[size_t(i)];
+            uint32_t s = p.slots + uint32_t(i) * kSlotSize;
+            if (saved.owned && G<uint16_t>(s + 0x2C) == saved.handle &&
+                !P(s + 0xFC) && !P(s + 0x100) && !P(s + 0xC4) && !P(s + 0x13C)) {
+                W32(s + 0xFC, saved.road);
+                W32(s + 0x100, saved.next);
+            }
+        }
+    }
+    g_puppet.clear();
+    g_tm = g_slots = 0;
+    g_active = false;
+    g_shown = g_hidden = 0;
+}
 
 void Hide(uint32_t s) {
     float y = kHiddenY;
@@ -116,6 +146,7 @@ void Apply(uint32_t s, const Car& c, float ahead) {
 }  // namespace
 
 bool Snapshot(std::vector<std::vector<uint8_t>>& packets, uint64_t now) {
+    if (!Playable()) return false;
     if (now - g_sent_at < kSendMs) return false;
     Pool p;
     if (!ReadPool(p)) return false;
@@ -168,24 +199,23 @@ void Receive(const uint8_t* data, int bytes) {
 
 void Tick(bool partner, uint64_t now) {
     std::lock_guard lock(g_lock);
-    if (!partner || g_remote.empty()) return;
     Pool p;
-    if (!ReadPool(p)) return;
+    if (!ReadPool(p)) { g_active = false; g_shown = g_hidden = 0; return; }
+    if (!partner || g_remote.empty() || !Playable()) { Release(p); return; }
     if (p.layout != g_host_layout || int(g_remote.size()) != p.n) {
         if (g_mismatch_logged != g_host_layout) {
             g_mismatch_logged = g_host_layout;
             Log("traffic: the host's pool differs from this one (%08X / %08X, %d / %zu cars): not synced", g_host_layout,
                 p.layout, p.n, g_remote.size());
         }
-        g_active = false;
+        Release(p);
         return;
     }
-    if (p.tm != g_tm) {  // a new pool (a city or race load): nothing of ours in it yet
-        g_tm = p.tm;
-        g_puppet.assign(size_t(p.n), 0);
+    if (p.tm != g_tm || p.slots != g_slots || g_puppet.size() != size_t(p.n)) {
+        g_tm = p.tm; g_slots = p.slots;
+        g_puppet.assign(size_t(p.n), {});
         Log("traffic: syncing %d cars with the host", p.n);
     }
-    g_active = true;
     int shown = 0, hidden = 0;
     for (int i = 0; i < p.n; i++) {
         uint32_t s = p.slots + uint32_t(i) * kSlotSize;
@@ -193,8 +223,10 @@ void Tick(bool partner, uint64_t now) {
         if (P(s + 0xEC) || P(s + 0xC4) == 1 || P(s + 0x13C)) continue;  // trucks, race cars, crashes: left local
         const Remote& r = g_remote[size_t(i)];
         bool live = r.at && now - r.at < kStaleMs && (r.car.flags & 1);
-        if (!live && !g_puppet[size_t(i)] && !P(s + 0xFC)) continue;
-        g_puppet[size_t(i)] = 1;
+        Puppet& saved = g_puppet[size_t(i)];
+        if (!live && !saved.owned && !P(s + 0xFC)) continue;
+        if (!saved.owned || saved.handle != G<uint16_t>(s + 0x2C))
+            saved = {P(s + 0xFC), P(s + 0x100), G<uint16_t>(s + 0x2C), true};
         if (live) {
             Apply(s, r.car, float(now - r.at) / 1000.0f);
             shown++;
@@ -204,6 +236,7 @@ void Tick(bool partner, uint64_t now) {
             hidden++;
         }
     }
+    g_active = shown > 0;
     g_shown = shown, g_hidden = hidden, g_frames++;
 }
 
@@ -215,9 +248,43 @@ void Stop() {
 
 std::string Describe() {
     std::lock_guard lock(g_lock);
-    char s[160];
-    std::snprintf(s, sizeof s, "traffic=%s shown=%d hidden=%d host_cars=%zu", g_active ? "on" : "off", g_shown, g_hidden,
-                  g_remote.size());
+    Pool p;
+    bool ready = ReadPool(p);
+    uint32_t tm = P(P(kRoot) + 8), setup = P(kSetupCurrent);
+    int spawned = 0, roads = 0, wrecks = 0;
+    if (ready) for (int i = 0; i < p.n; i++) {
+        uint32_t slot = p.slots + uint32_t(i) * kSlotSize;
+        if (G<uint16_t>(slot + 0x2C) == 0xFFFF) continue;
+        spawned++;
+        roads += P(slot + 0xFC) != 0;
+        wrecks += P(slot + 0x13C) != 0;
+    }
+    int views = int(P(setup + 0x50));
+    // 0x6CDCD..0x6CDFB: the density-table index is LOCAL VIEWS-1, not the human racer count.
+    int target = -1;
+    if (tm && Mapped(tm, 0x1A0)) {
+        uint32_t offset = P(setup + 8) == 2 ? 0x70 : 0x68;
+        if (Mapped(setup + 0x108, 1) && G<uint8_t>(setup + 0x108)) offset = P(setup + 8) == 2 ? 0x7C : 0x78;
+        else if (views >= 1 && views <= 2) offset += uint32_t(views - 1) * 4;
+        else offset = 0;
+        if (offset) target = int(R32(tm + offset));
+    }
+    uint32_t regions = P(P(0x5587E0) + 0x5C), session = P(0x557EFC);
+    auto byte = [](uint32_t va) { return Ptr(va) ? int(G<uint8_t>(va)) : -1; };
+    uint32_t links = 0;
+    for (uint32_t i = 0; i < std::min(P(regions + 0x18), 8u); i++) {
+        uint32_t count = regions + 0x20 + i * 8;
+        if (Ptr(count)) links += G<uint16_t>(count);
+    }
+    char s[512];
+    std::snprintf(s, sizeof s,
+        "traffic=%s shown=%d hidden=%d host_cars=%zu pool_ready=%d pool=%d spawned=%d roads=%d wrecks=%d "
+        "spawn_gate=%d frozen=%d target=%d humans=%u views=%d native_net=%d session=%d/%d regions=%u links=%u",
+        g_active ? "on" : (ready && !spawned && !g_remote.empty() ? "waiting_spawn" : "off"),
+        g_shown, g_hidden, g_remote.size(), ready, p.n, spawned, roads, wrecks,
+        byte(0x4AFCCC), tm ? byte(tm + 0x144) : -1, target, P(setup + 0x4C), views,
+        setup ? byte(setup + 0x108) : -1, int32_t(P(session + 0x10)), int32_t(P(session + 0x18)),
+        P(regions + 0x18), links);
     return s;
 }
 

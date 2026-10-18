@@ -1,42 +1,38 @@
-# Relatório — co-op da campanha do MC3
+> Atualização ao vivo autorizada em 18/10/2026: teste isolado confirmou tela inteira e chegada sem crash neste circuito, com $800 para ambos. Largada automática falhou; tráfego 48/0 reproduzido; modo padrão de controles do runner contorna o hook. Ver [TESTE-ISOLADO-2026-10-18](docs/TESTE-ISOLADO-2026-10-18.md). O restante deste relatório descreve a entrega anterior e seus testes estáticos.
 
-**Resumo (atualizado 18/10 ~12h40):** o carro de campanha do parceiro entra no seu mundo; menu F10, sala EOS, largada comum e vitória para os dois funcionam nos testes com 2 cópias; há um zip de teste. Falta: tráfego sincronizado (em andamento, ainda não funciona), corrigir a tela dividida que apareceu, IA sincronizada, e o teste real entre dois PCs.
+# Continuação do co-op — 18/10/2026
 
-## Rota atual: mod dentro do seu xrevive
-- Um `xinput1_4.dll` (o mod) fica ao lado de uma **cópia** do runner do xrevive. Sua instalação e o seu exe não são tocados.
-- O mod acha a memória do Xbox no runner, onde host = base + endereço do Xbox.
-- A tentativa anterior, uma recompilação própria com o SDK do Black, ficou parada: tela preta e sem XACT. Está no commit `80b0387`, se um dia for útil.
+Trabalho em `C:\dev\mc3-coop`, branch `coop-noite`, sem commit/push. Esta revisão não abriu jogo/runner, não encerrou processos e não acessou `D:\Jogos`.
 
-## O que funciona (testado com 2 cópias escondidas na mesma máquina)
-| Item | Como foi testado |
-|---|---|
-| Cópias de teste mudas, num desktop invisível, com save e log próprios; nenhuma janela no seu desktop | `tools\xrun.py`, conferido pela lista de janelas |
-| Prints dessas cópias (pelo D3D12 do runner) | `tools\ctl.py <porta> shot` |
-| Controle virtual (XInput) para dirigir as cópias pelos menus e na corrida | as cópias chegam à 1ª corrida e aceleram |
-| Carro do jogador lido ao vivo (posição, rotação, velocidade, comandos) | conferido acelerando: posição muda, velocidade em `car+0xB0` |
-| Teleporte (base do "me leve até meu parceiro") | carro movido 25 m e parado no lugar |
-| Rede direta (UDP): sessão, apelidos, posição a 30 Hz | o parceiro vê o host a ~1 m de atraso a 17 m/s |
-| **Carro de campanha do parceiro no seu mundo** | o HUD do host passa de 4 para 5 corredores; o tC do parceiro aparece andando na frente do host |
-| Mesmo grid nos dois mundos (host na posição 0, parceiro na 1) | posições de largada lado a lado nas duas cópias |
-| O host recebe o carro da garagem do parceiro (`CarCfg`, 0x108 bytes) | pintura alterada no parceiro chega ao host em 1 s |
+## Alterações desta revisão
 
-## Como o jogo foi usado (detalhes em `docs/RE-MAPA.txt` e `docs/RE-REMOTO.txt`)
-- **O parceiro é um 2º jogador humano "offline".** Não uso o modo rede do jogo, porque ele desliga IA, tráfego, chegada, dinheiro, crédito e autosave da carreira.
-- **Configuração da vaga:** os setups de corrida recebem 2 humanos, e a vaga 1 recebe o `CarCfg` do parceiro, sem controle.
-- **Movimento:** o mod move o carro do parceiro (posição, rotação, velocidade e comandos), interpolado 100 ms atrás.
+- Vaga remota sem HUD/câmera: `slot+0x14=-1` nos setups atual e próximo, mantendo uma tela local.
+- Na família comum de corridas por voltas/checkpoints, o progresso remoto é concluído por stores antes da chegada local: `+4=1`, voltas restantes zero, guarda dos checkpoints, flag de desistência e contador `race+0x1250` incrementado uma vez. Não chama o callback que exige HUD/câmera. A desistência é um marcador interno desta cópia; o resultado real do parceiro chega pela rede.
+- Removida a antiga desistência por desconexão, inclusive o acionamento do timer global. Desconectar não conta outro fim. Os humanos dos setups carregados ficam estáveis durante a corrida.
+- A vitória local também é detectada no estado 7: agora ela pode pular diretamente de 5 para 7, sem uma consulta de XInput no estado 6.
+- Complemento de prêmio: aceita somente o serial da corrida atual, atualiza dinheiro e prêmio mostrado no painel, marca carreira suja, não paga novamente por retransmissão e recusa overflow. O estado reinicia no próximo início de corrida.
+- O proxy agora verifica `_ReturnAddress()==0x1404E35C4`, base/timestamp do runner e bytes do call site. Não usa mais `user==0` como prova de contexto guest nem executa esse trabalho por GetStateEx. As escritas de corrida/tráfego aguardam esse gancho validado da thread do jogo. Retirado o fallback que fazia essas escritas pela thread de rede quando faltava XInput; isso evitava uma janela de concorrência no contador de chegada. Sem o gancho, o log informa a suspensão.
+- Tráfego: diagnóstico agora distingue pool pronto, slots realmente criados, links, destroços, gate de spawn, freeze, densidade escolhida, telas/humanos, sessão nativa e regiões. Não chama de sincronizado um pool com zero puppets desenhados.
+- Lançador da entrega do Codex incorporado à pasta principal: mensagens Unicode, bloqueio por caminho de processo, oferta opcional de firewall UDP, `--logs` e abertura sem TOML. O empacotador usa o build atual em `out\mod` e produz `out\MC3Coop-test.zip`.
 
-## O que falta (em ordem)
-1. **Menu F10 dentro do jogo** (ImGui no D3D12 do runner). Para isso o jogo roda com `XRECOMP_GPU_BACKEND=d3d12` pelo nosso lançador, e não com o Vulkan que o seu xrevive usa hoje; ainda não testei se a imagem fica igual.
-2. **Início de corrida sincronizado.** Quando o host começa uma corrida, o parceiro entra na mesma (identificada por cidade + índice, porque o ID muda de save para save).
-3. **Crédito para os dois.** Se qualquer um vencer, a corrida conta na carreira dos dois e cada um passa pelas próprias telas de save.
-4. **EOS (sala por código)** com as credenciais do Black. Compila, mas não foi testado.
-5. **Lançador e zip para o seu amigo**, com README.
-6. **Melhorias:** IA sincronizada pelo host, colisão entre os carros e a prova visual do carro do parceiro com dois saves diferentes.
+## Validação desta revisão
 
-## Pendências e riscos conhecidos
-- **Corrida presa na chegada.** O jogo só fecha a corrida quando todos os humanos chegam. Se o parceiro cair no meio, o mod precisa voltar para 1 humano (não testado).
-- **Mudança de carro só no próximo carregamento.** Se o parceiro trocar de carro, o seu mundo só mostra o novo depois que o mundo recarregar (garagem ou menus).
-- **Base da navegação automática.** O menu principal ignora comandos durante a animação de entrada, e o direcional segurado por 300 ms repete.
+`python tools\test_coop_memory.py` compila os fontes reais de carro/corrida/tráfego contra RAM Xbox simulada, sem carregar qualquer executável do jogo. Cobre: HUD -1; guardas de CP/volta; contagem idempotente; desconexão; resultado 5→7; prêmio compartilhado; pacotes duplicados, negativos e de outra corrida; overflow; proteção de outras classes de corrida; filtro de contexto/build do XInput; diagnóstico de tráfego somente leitura e seleção por telas.
 
-## Commits locais (branch `coop-noite`, sem push)
-`80b0387` build própria (abandonada) · `09d2570` mod, canal de teste e prints · `f54e0f9` sessão de rede e carro local · `3e5cd1e` carro do parceiro no seu mundo
+`mod\package.cmd` compila o mod e o lançador. O build usa `MC3COOP_BUILD_OUT` para manter as saídas nesta pasta; a chamada direta legada a `build.cmd` conserva seu destino antigo quando essa variável não está definida. O zip pode conter `coop-online.toml`, permanece ignorado pelo Git e não foi publicado.
+
+Os testes do lançador usam diálogos/destino Desktop/processo do jogo interceptados; o PowerShell da coleta é real. Não testam UI real, criação efetiva da regra de firewall ou abertura do runner.
+
+## Ainda pendente / não afirmar que está resolvido
+
+1. **Teste visual da tela e da chegada com duas cópias.** A alteração foi comprovada por leitura de asm e testes de stores, não por execução desta versão. Uma cópia já carregada com HUD remoto precisaria de recarga do mundo; trocar o número do slot não destrói um HUD já criado.
+2. **Vitória recebida tarde.** Se o resultado local já foi processado antes de chegar o aviso de vitória do parceiro, esta versão não refaz o relatório de carreira retroativamente. Concluir o remoto no início torna a janela menor. É necessário projetar sincronização do encerramento/crédito tardio antes de prometer vitória para ambos em qualquer latência.
+3. **Tráfego 48/0.** A causa real da ausência de slots ativos no parceiro continua sem captura nesta revisão. O pool pode estar alocado com todos os handles `0xFFFF`, sem nenhum objeto inserido no phLevel. Escrever matrizes não cria esses objetos. Não forcei handles nem chamei spawn. O diagnóstico novo permite localizar o gate no próximo teste autorizado.
+4. **Correção do mapa de densidade:** asm 0x6CDCD..0x6CDFB usa `setup+0x50` (telas), não `setup+0x4C` (humanos). Uma segunda tela pode escolher outra densidade; não prova que foi a causa do 48/0 observado. Ver `docs/RE-HUD-SEM-CAMERA.md`.
+5. **Modalidades especiais.** Contador DWORD `+0x1250` é usado somente nas vtables comuns conhecidas; outras classes não recebem essa escrita. Eliminação, pontos, perseguição, hookman e variantes ainda precisam de validação específica.
+6. **Puppets de tráfego/IA e colisão.** Tráfego continua WIP, caminhões/crashes ficam locais e o método atual de carros sem road link ainda carece de prova de broadphase. IA adversária continua independente; o mapa `docs/RE-IA.md` não fornece um interruptor confirmado do cérebro.
+7. **Dois PCs/EOS.** Criar sala localmente não prova entrada entre PCs. O pacote desta revisão é de teste e não foi executado nesta sessão.
+
+## Histórico recebido do Claude (não repetido agora)
+
+Nos commits anteriores ele relatou ter testado duas cópias na mesma máquina: carro de campanha do parceiro, conexão IP, criação de sala EOS, F10/F8, largada comum e contador de vitórias compartilhado. A versão anterior tinha HUD remoto sem câmera e tela dividida; seu teste de chegada não valida a segurança dessa configuração. O zip antigo em `D:\dev\mc3-coop-build\MC3Coop-test.zip` antecede a largada/vitória; o novo zip fica em `C:\dev\mc3-coop\out\MC3Coop-test.zip` e não substitui o arquivo antigo fora deste workspace.

@@ -35,7 +35,7 @@ bool Snapshot(std::vector<std::vector<uint8_t>>& packets, uint64_t now_ms);
 void Receive(const uint8_t* data, int bytes);
 // partner, game thread (the xinput hook): the puppets written
 void Tick(bool partner, uint64_t now_ms);
-void Stop();  // no session: puppets hidden, nothing written any more
+void Stop();  // session thread: next game-thread Tick restores the puppets' road links
 std::string Describe();
 
 }  // namespace mod::traffic

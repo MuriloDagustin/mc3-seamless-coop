@@ -3,9 +3,9 @@
 // A partner is a second human of the host's own career race/cruise, without the game's network mode (that mode
 // stops the AI, the traffic, the finish, the money, the career credit and the autosave): both race setups (current
 // [0x53F2E0] and next [0x53F2E4]) say 2 humans, and slot 1 holds the partner's own campaign car (its CarCfg) with no
-// pad (+0x10 = -1, +0x18 = -1) but its HUD number (+0x14 = the slot: the finish handler 0x1E06E0 reads that player's
-// HUD with no null check, docs/RE-CORRIDA.txt), so the game builds a full player car from it when the world loads and
-// never looks for a controller. That car has no input object; the mod drives it from the partner's packets.
+// pad/camera/HUD (+0x10, +0x14, +0x18 = -1). A second HUD would force split-screen and use a missing camera.
+// race.cpp completes the remote racer locally without its native finish callback; its real result arrives over
+// the network. The game still builds its car, driven by the partner's packets.
 #include "car.h"
 
 #include <algorithm>
@@ -84,7 +84,7 @@ void WriteSlot(uint32_t setup, int slot, const Remote& r) {
     if (Ptr(cfg) && r.have_cfg)  // the CarCfg object the setup owns: keep its vtable, take the partner's fields
         std::memcpy(HostPtr(cfg + 4), r.cfg.data() + 4, kCarCfgBytes - 4);
     W32(s + kSlotPad, 0xFFFFFFFF);
-    W32(s + kSlotHud, uint32_t(slot));
+    W32(s + kSlotHud, 0xFFFFFFFF);  // no HUD/camera: never request a second viewport
     W32(s + kSlotPlayer, 0xFFFFFFFF);
     G<uint8_t>(s + kSlotOut) = 0;
 }
@@ -98,8 +98,19 @@ void KeepSetups() {
         uint32_t setup = Ptr(global) ? R32(global) : 0;
         if (!Ptr(setup + 0x3E0 - 4)) continue;
         if (G<uint8_t>(setup + kSetupNetwork)) continue;  // the game's own multiplayer modes: leave them alone
-        for (int i = 1; i < humans; i++) WriteSlot(setup, i, g_remote[i]);
-        if (int(R32(setup + kSetupHumans)) != humans) W32(setup + kSetupHumans, uint32_t(humans));
+        int slots = humans;
+        // A loaded race owns these players/progress entries. Disconnecting must not change its human count:
+        // state 6 otherwise skips the normal result/payment path (0x1C3773..0x1C37A4). Keep both setups
+        // equal too: 0x20260 can reload the world when their human counts differ.
+        uint32_t holder = Ptr(0x533E24) ? R32(0x533E24) : 0;
+        uint32_t race = Ptr(holder + 4) ? R32(holder + 4) : 0;
+        if (Ptr(race) && R32(race) != 0x46A7D8) {
+            uint32_t current = Ptr(kSetupCurrent) ? R32(kSetupCurrent) : 0;
+            int existing = Ptr(current + kSetupHumans) ? int(R32(current + kSetupHumans)) : 0;
+            if (existing >= 1 && existing <= 8) slots = existing;
+        }
+        for (int i = 1; i < slots; i++) WriteSlot(setup, i, g_remote[i]);
+        if (int(R32(setup + kSetupHumans)) != slots) W32(setup + kSetupHumans, uint32_t(slots));
         if (R32(setup + kSetupViews) != 1) W32(setup + kSetupViews, 1);
     }
     g_slots_written = humans > 1;

@@ -1,35 +1,80 @@
-MC3 CO-OP - VERSAO DE TESTE
+MC3 CO-OP - VERSÃO DE TESTE
 ===========================
 
 Co-op online da campanha do Midnight Club 3 DUB Edition Remix, por cima do xrevive.
-Cada um joga com o carro da propria carreira; o carro do parceiro aparece no seu mundo.
+Cada um joga com o carro da própria carreira; o carro do parceiro aparece no seu mundo.
 
 O QUE PRECISA
-- O xrevive com o Midnight Club 3 DUB Edition Remix instalado e funcionando (a sua propria copia do jogo).
-- Os dois jogadores com esta mesma versao do zip.
+- O xrevive com o Midnight Club 3 DUB Edition Remix instalado e funcionando (sua própria cópia).
+- Os dois jogadores com a mesma versão do pacote.
 
 COMO JOGAR
-1. Extraia o zip numa pasta qualquer (ex.: C:\Jogos\MC3Coop). Nao precisa mexer na pasta do jogo.
-2. Feche o jogo se estiver aberto e abra o MC3Coop.exe (nao o xrevive).
-   Na primeira vez ele procura a pasta do jogo; se nao achar, pede para voce escolher a pasta
-   "Midnight Club 3 DUB Edition Remix" do xrevive (a que tem as pastas extracted e SaveData).
-3. No jogo, aperte F10 para abrir o painel CO-OP.
-   - Pela internet (recomendado): um cria a sala em "Create online room" e manda o codigo;
-     o outro digita o codigo e clica em "Join by code".
-   - Ou por IP: um clica em "Host"; o outro digita o IP do host e clica em "Join IP"
-     (porta UDP 45410 liberada/encaminhada no roteador do host).
-4. Entrem os dois na carreira. O carro do parceiro aparece no seu mundo como mais um corredor.
-   F8 (ou "Take me to my partner") leva voce ate o seu parceiro.
+1. Extraia o zip inteiro numa pasta em que você possa gravar arquivos (ex.: Documentos\MC3Coop).
+   Não é necessário alterar a pasta do jogo. Não abra o executável de dentro do zip.
+2. Feche manualmente o jogo e o xrevive, se estiverem abertos, e abra MC3Coop.exe.
+   O lançador verifica os caminhos dos processos e avisa se encontrar outra cópia aberta.
+   Na primeira vez ele procura a instalação. Se precisar, selecione a pasta
+   "Midnight Club 3 DUB Edition Remix" que contém extracted e SaveData.
+   O caminho fica salvo em MC3Coop.ini ao lado do lançador.
+3. Na primeira execução ele oferece criar uma regra de entrada UDP no Firewall do Windows.
+   Só se você escolher Sim, o Windows pede administrador para executar o netsh que cria a regra.
+   O jogo continua sem elevação. Você pode recusar ou cancelar e continuar jogando.
+   A regra permite UDP apenas para o MC3Runner.exe desta pasta, em redes privadas.
+   Depois de mudar a pasta do mod, execute novamente MC3Coop.exe --firewall.
+   Para repetir a oferta, crie um atalho para MC3Coop.exe e acrescente --firewall ao Destino.
+   Se sua rede for pública, revise as permissões do firewall para essa rede manualmente.
+4. No jogo, aperte F10 para abrir o painel CO-OP.
+   - Pela internet: um cria a sala em "Create online room" e manda o código;
+     o outro digita o código e clica em "Join by code".
+   - Ou por IP: um clica em "Host"; o outro digita o IP do host e clica em "Join IP".
+     Para conexão direta pela internet, libere/encaminhe UDP 45410 no roteador do host.
+     A regra do Firewall do Windows não configura o roteador.
+5. Entrem os dois na carreira. O carro do parceiro aparece como mais um corredor.
+   F8 (ou "Take me to my partner") leva você até o parceiro.
 
-O QUE AINDA NAO FAZ (proximas versoes)
-- Comecar a mesma corrida automaticamente para os dois e dar a vitoria para os dois.
-  Por enquanto cada um corre a corrida no proprio jogo.
-- IA e trafego iguais nos dois jogos (cada jogo tem os seus).
-- Se o parceiro trocar de carro, o seu jogo mostra o carro novo so depois de recarregar o mundo
-  (garagem ou menu).
-- Se o parceiro sair no meio de uma corrida, o seu jogo pode esperar a chegada dele: saia pela pausa.
+CONTROLES
+- O teclado fica habilitado por padrão. Também pode ser usado um controle compatível com XInput
+  (como um controle Xbox no Windows). Outros tipos de controle ainda precisam de validação.
+- A sincronização e a largada do parceiro foram testadas com o teclado habilitado junto ao controle
+  interno de teste. O lançador seleciona o modo de controles necessário para essa sincronização.
+- Se você já definiu XRECOMP_KEYBOARD=0 no Windows, o lançador respeita essa opção.
+  Remova essa variável para voltar a habilitar o teclado.
 
-OBSERVACOES
-- O jogo roda no modo grafico D3D12 do xrevive (o painel F10 e desenhado nele).
-- Seus saves sao os mesmos do xrevive normal.
-- Logs para mandar em caso de problema: a pasta logs ao lado do MC3Coop.exe.
+SE FALTAR COOP-ONLINE.TOML
+- O jogo abre e o co-op por IP continua disponível (Host / Join IP).
+- As salas por código precisam de coop-online.toml e do SDK EOS do pacote.
+  Extraia novamente o pacote recebido para recuperar esses arquivos.
+- coop-online.toml contém credenciais: não publique o pacote nem adicione esse arquivo ao git.
+
+COMO ENVIAR OS LOGS
+- Crie um atalho para MC3Coop.exe. Em Propriedades > Destino, deixe, por exemplo:
+  "C:\Users\SeuNome\Documents\MC3Coop\MC3Coop.exe" --logs
+- Esse atalho não abre o jogo e funciona mesmo sem a instalação ou DLL do mod.
+- Ele cria MC3Coop-logs-DATA-HORA-PID.zip na sua Área de Trabalho e mostra o caminho.
+  Envie esse zip para quem está ajudando. Não envie o zip de instalação com credenciais.
+- São coletados diagnósticos .log, .txt, .json e .dmp da pasta logs (incluindo logs\runner)
+  e Log_File_For_Tera.log ao lado do exe, quando existir. Links/junctions são ignorados.
+  coop-online.toml, saves e executáveis não entram no zip. Os logs podem conter caminhos locais e IPs.
+- Se não houver logs ou algum arquivo estiver indisponível, o lançador avisa.
+  Se a coleta falhar, confira espaço e permissão na Área de Trabalho ou envie a pasta logs manualmente.
+
+ESTADO DESTA VERSÃO
+- O host iniciar uma corrida leva o parceiro à mesma corrida de carreira.
+- A vitória é comunicada pela rede e há complemento do prêmio até o valor recebido pelo vencedor.
+- A vaga remota não tem HUD nem câmera. Nas corridas convencionais ela é concluída internamente
+  para não travar sua chegada; pode aparecer como concluída/desistente na classificação local.
+- Essas últimas correções de tela e prêmio foram compiladas e verificadas com memória simulada.
+  Ainda precisam de teste visual com duas cópias antes de considerar este pacote validado para jogar.
+- Tráfego sincronizado continua experimental: se o parceiro não tiver carros locais já criados,
+  o mod ainda não cria puppets. A IA dos adversários também continua independente em cada cópia.
+- Corridas de eliminação, pontos, perseguição e outras modalidades precisam de validação específica.
+- Uma vitória que chegar pela rede depois de seu resultado local já ter sido processado ainda precisa
+  de tratamento adicional; não há garantia de crédito retroativo nesta versão.
+- Troca do carro remoto ainda exige recarregar o mundo (garagem/menu).
+- Salas EOS entre dois PCs ainda precisam do teste com o amigo; criar sala localmente não prova a conexão.
+
+OBSERVAÇÕES
+- O jogo usa o modo gráfico D3D12 do xrevive (o painel F10 é desenhado nele).
+- Seus saves são os mesmos do xrevive normal.
+- Para testes, MC3COOP_GAME força a pasta informada e desliga a busca automática.
+- O pacote compilado fica em out\MC3Coop-test.zip dentro do workspace. Uso local; não publicar.

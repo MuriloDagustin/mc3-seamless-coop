@@ -1,3 +1,5 @@
+ATUALIZAÇÃO 18/10/2026 (Codex, estática; sem jogo): a seleção de densidade em 0x6CDCD..0x6CDFB usa setup+0x50 (telas locais), NÃO setup+0x4C (humanos). Entradas são DWORDs tm+0x68/+0x70 +4*(views-1). Ver docs/RE-HUD-SEM-CAMERA.md. O diagnóstico traffic::Describe expõe os gates do pool; a causa do 48/0 ainda não foi confirmada em execução. As receitas históricas abaixo não comprovam criação de slots no parceiro.
+
 ==================== vehicle-state
 RECIPE: I mapped how one ambient traffic vehicle is laid out and updated. Pool slot i = [[0x50152C]+8]+0x130 + i*0x21C, for i < (s16)[mgr+0x12C].
 

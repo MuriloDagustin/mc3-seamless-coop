@@ -31,6 +31,7 @@
 #include "race.h"
 #include "traffic.h"
 #include "settings.h"
+#include "ai.h"
 
 // the game identity copies must share (the XBE's title, version and size, from the guest image), 40 characters
 extern char kImageSha1[41];
@@ -44,8 +45,8 @@ constexpr uint64_t kHelloMs = 500;
 constexpr uint64_t kTimeoutMs = 5000;
 
 constexpr uint32_t kMagic = 0x4F43334D;  // "M3CO"
-constexpr uint16_t kProtocol = 1;
-enum Type : uint8_t { kHello = 1, kWelcome, kState, kBye, kDiscover, kOffer, kRoster, kFull, kCar, kRaceStart, kWon, kTraffic };
+constexpr uint16_t kProtocol = 2; // terminal won/lost results; all copies must run the same build
+enum Type : uint8_t { kHello = 1, kWelcome, kState, kBye, kDiscover, kOffer, kRoster, kFull, kCar, kRaceStart, kWon, kTraffic, kFinished };
 
 #pragma pack(push, 1)
 struct Header {
@@ -90,6 +91,7 @@ struct WonPacket {  // the sender won the race it shared (again with what 1st pl
     uint32_t serial;
     int32_t prize;
 };
+struct FinishedPacket { Header h; mod::race::Finished result; };
 #pragma pack(pop)
 constexpr int kMaxDatagram = 1170;  // also fits the EOS P2P transport
 union Packet {
@@ -218,7 +220,6 @@ void Sample(State& s, int to, uint64_t now) {
 }
 
 void Forget(int player) {
-    mod::race::OnPartnerGone();
     mod::car::Remove(SlotOf(player));
     g_players[player] = {};
 }
@@ -295,7 +296,7 @@ void Receive(uint64_t now) {
             source = slot;
             if (destination != 0) {  // for another client: pass it on
                 if (destination >= kMaxPlayers || destination == source || !g_players[destination].have ||
-                    in.h.session != g_players[source].session || (in.h.type != kState && in.h.type != kCar && in.h.type != kWon))
+                    in.h.session != g_players[source].session || (in.h.type != kState && in.h.type != kCar && in.h.type != kWon && in.h.type != kFinished))
                     continue;
                 g_players[source].last_rx = now;
                 net::Send(g_players[destination].endpoint, &in, n);
@@ -382,6 +383,13 @@ void Receive(uint64_t now) {
                     mod::race::OnPartnerWon(wp.serial, wp.prize);
                 }
                 break;
+            case kFinished:
+                if (n == int(sizeof(FinishedPacket))) {
+                    FinishedPacket fp;
+                    std::memcpy(&fp, &in, sizeof fp);
+                    mod::race::OnPartnerFinished(fp.result);
+                }
+                break;
             case kTraffic:
                 if (source == 0 && g_cfg.role == Role::Join)
                     mod::traffic::Receive(in.raw + sizeof(Header), n - int(sizeof(Header)));
@@ -411,6 +419,17 @@ void Send(uint64_t now) {
         wp.serial = won;
         wp.prize = prize;
         Queue(&wp, sizeof wp);
+    }
+    // Periodic state, independent of the finite event queue: a lost first terminal packet cannot deadlock a gate.
+    mod::race::Finished finished;
+    if (mod::race::TakeFinished(finished)) {
+        FinishedPacket fp{};
+        fp.result = finished;
+        for (int i = 0; i < kMaxPlayers; i++)
+            if (i != g_local_player && g_players[i].have && g_players[i].welcomed) {
+                fp.h = Make(kFinished, i, now);
+                SendTo(i, &fp, sizeof fp);
+            }
     }
     for (auto& r : g_repeats) {
         if (!r.left || now < r.next) continue;
@@ -525,6 +544,7 @@ void StartSession() {
 
 void StopSession() {
     mod::traffic::Stop();
+    mod::ai::Stop();
     if (g_net)
         for (int i = 0; i < kMaxPlayers; i++)
             if (i != g_local_player && g_players[i].have) {

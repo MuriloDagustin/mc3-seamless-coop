@@ -12,6 +12,7 @@
 #include "overlay.h"
 #include "race.h"
 #include "traffic.h"
+#include "ai.h"
 #include "settings.h"
 
 extern std::atomic<uint32_t> g_xinput_calls;
@@ -34,14 +35,16 @@ void Identity() {
 void Loop() {
     using namespace std::chrono;
     auto next = steady_clock::now();
+    bool warned_no_hook = false;
     for (;;) {
         next += milliseconds(16);
         try {
             coop::Frame();
-            if (GetTickCount64() - g_fiber_at > 250) {  // no xinput polls (no controller): the game work from here
-                race::Tick(coop::Hosting(), coop::PlayerCount() > 1 && coop::Networked());
-                traffic::Tick(coop::Networked() && !coop::Hosting(), GetTickCount64());
-            }
+            // Race counter/payment stores must never race with the guest's own finish callback.
+            // Without a verified input hook, wait instead of doing that read/modify/write on this OS thread.
+            bool waiting = coop::Networked() && GetTickCount64() - g_fiber_at > 250;
+            if (waiting && !warned_no_hook) Log("game: waiting for guest xinput hook; race/traffic writes suspended");
+            warned_no_hook = waiting;
         } catch (...) {
             Log("game: session tick threw");
         }
@@ -75,6 +78,7 @@ void FiberTick() {
     try {
         race::Tick(coop::Hosting(), coop::PlayerCount() > 1 && coop::Networked());
         traffic::Tick(coop::Networked() && !coop::Hosting(), now);
+        ai::Tick(coop::Networked() && !coop::Hosting(), now);
     } catch (...) {
     }
     busy = false;
@@ -91,7 +95,7 @@ std::string State() {
                   g_ticks.load(), g_xinput_calls.load(), dxgi::Presents(), coop::Status(), car::City(), have,
                   double(p.m[3][0]), double(p.m[3][1]), double(p.m[3][2]), double(-p.m[2][0]), double(-p.m[2][1]),
                   double(-p.m[2][2]), double(speed), double(p.throttle));
-    return std::string(s) + " " + race::Describe() + " " + traffic::Describe();
+    return std::string(s) + " " + race::Describe() + " " + traffic::Describe() + " " + ai::Describe();
 }
 
 }  // namespace mod::game

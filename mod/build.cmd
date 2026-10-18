@@ -8,7 +8,11 @@ if not defined VSDIR set "VSDIR=C:\Program Files\Microsoft Visual Studio\18\Comm
 call "%VSDIR%\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64 >nul
 set "PATH=%VSDIR%\VC\Tools\Llvm\x64\bin;%PATH%"
 cd /d "%~dp0"
-set "OUT=D:\dev\mc3-coop-build\mod"
+if defined MC3COOP_BUILD_OUT (
+    set "OUT=%MC3COOP_BUILD_OUT%"
+) else (
+    set "OUT=D:\dev\mc3-coop-build\mod"
+)
 if not exist "%OUT%" mkdir "%OUT%"
 set "EOS=C:\dev\eos-sdk\SDK"
 set "EOSFLAGS="
