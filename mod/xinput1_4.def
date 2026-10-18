@@ -1,0 +1,19 @@
+LIBRARY xinput1_4
+EXPORTS
+    DllMain PRIVATE
+    XInputGetState = ProxyXInputGetState @2
+    XInputSetState = ProxyXInputSetState @3
+    XInputGetCapabilities = ProxyXInputGetCapabilities @4
+    XInputEnable = ProxyXInputEnable @5
+    XInputGetBatteryInformation = ProxyXInputGetBatteryInformation @7
+    XInputGetKeystroke = ProxyXInputGetKeystroke @8
+    XInputGetAudioDeviceIds = ProxyXInputGetAudioDeviceIds @10
+    ProxyXInputGetStateEx @100 NONAME
+    ProxyXInputWaitForGuideButton @101 NONAME
+    ProxyXInputCancelGuideButtonWait @102 NONAME
+    ProxyXInputPowerOffController @103 NONAME
+    ProxyXInputGetBaseBusInformation @104 NONAME
+    ProxyXInputGetCapabilitiesEx @108 NONAME
+    vkNegotiateLoaderLayerInterfaceVersion
+    MC3Coop_GetInstanceProcAddr
+    MC3Coop_GetDeviceProcAddr

@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 RUN = Path(r"D:\dev\mc3-coop-data\run")
+XRUN = Path(r"D:\dev\mc3-coop-data\xrun")
 CAPTURES = Path(__file__).resolve().parent.parent / "captures"
 
 
@@ -46,26 +47,18 @@ class Copy:
             time.sleep(0.5)
         raise TimeoutError(f"{self.port}: no '{text}' in {seconds}s")
 
-    def shot(self, name=None, seconds=20):
-        """The next frame as a PNG in captures/; returns its path."""
-        reply = self.command("shot")
-        folder = Path(reply.split(" ", 1)[1])
-        before = set(folder.glob("*")) if folder.exists() else set()
-        end = time.time() + seconds
-        while time.time() < end:
-            new = [d for d in folder.glob("*") if d not in before and (d / "final.bmp").exists()] if folder.exists() else []
-            if new:
-                time.sleep(0.5)  # the textures after final
-                from PIL import Image
-                CAPTURES.mkdir(exist_ok=True)
-                out = CAPTURES / f"{name or time.strftime('%H%M%S')}-{self.port}.png"
-                Image.open(new[0] / "final.bmp").save(out)
-                for f in new[0].glob("*"):
-                    f.unlink()
-                new[0].rmdir()
-                return out
-            time.sleep(0.3)
-        raise TimeoutError(f"{self.port}: no capture in {seconds}s")
+    def shot(self, name=None):
+        """The game window (PrintWindow in the mod) as captures/<name or time>-<port>.png; returns its path."""
+        from PIL import Image
+        CAPTURES.mkdir(exist_ok=True)
+        bmp = XRUN / f"shot-{self.port}.bmp"
+        self.sock.settimeout(12)
+        self.command(f"shot {bmp}")
+        self.sock.settimeout(3)
+        out = CAPTURES / f"{name or time.strftime('%H%M%S')}-{self.port}.png"
+        Image.open(bmp).convert("RGB").save(out)
+        bmp.unlink()
+        return out
 
 
 def main():

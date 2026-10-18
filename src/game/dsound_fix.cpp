@@ -3,7 +3,8 @@
 // exist. They are (this, value) setters with no output the game reads, by their place in the XDK 5849
 // IDirectSoundBuffer order and the voice method each one reaches (see docs/DIAGNOSTICO.md):
 //   buffer 3C2090 SetPitch, 3C20AC SetLFO, 3C20C8 SetEG, 3C2240/3C225C/3C2278 (voice 3C0C81/0C94/0DC5)
-//   stream 3C2299 SetPitch, 3C229E SetLFO, 3C22D4/3C22D9/3C22DE (the same three voice methods)
+//   stream 3C2299 SetPitch, 3C229E SetLFO, 3C22D4/3C22D9/3C22DE (the same three voice methods),
+//          3C2933 SetOutputBuffer (XACT's submixes: without it the stream plays straight to the output)
 // The software mixer has no pitch, LFO or envelope, so S_OK is what the game needs.
 #include "kernel/kernel.h"
 #include "xdk/hle.h"
@@ -22,6 +23,7 @@ DS_NOOP(003C229E)
 DS_NOOP(003C22D4)
 DS_NOOP(003C22D9)
 DS_NOOP(003C22DE)
+DS_NOOP(003C2933)
 
 // IDirectSound_CreateSoundStream(this, desc, stream out, outer), ret 0x10: XACT's streams (sub_0040F050). The
 // library's CDirectSound::CreateSoundStream (3C3511) builds a hardware voice; the SDK's DirectSoundCreateStream

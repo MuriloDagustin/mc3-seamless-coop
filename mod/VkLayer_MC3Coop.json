@@ -1,0 +1,14 @@
+{
+    "file_format_version": "1.2.0",
+    "layer": {
+        "name": "VK_LAYER_MC3COOP_overlay",
+        "type": "GLOBAL",
+        "library_path": "./xinput1_4.dll",
+        "api_version": "1.3.0",
+        "implementation_version": "1",
+        "description": "Midnight Club 3 co-op panel (F10) and test captures",
+        "functions": {
+            "vkNegotiateLoaderLayerInterfaceVersion": "vkNegotiateLoaderLayerInterfaceVersion"
+        }
+    }
+}
