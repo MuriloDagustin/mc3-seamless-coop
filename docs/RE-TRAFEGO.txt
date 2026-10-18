@@ -1,0 +1,205 @@
+==================== vehicle-state
+RECIPE: I mapped how one ambient traffic vehicle is laid out and updated. Pool slot i = [[0x50152C]+8]+0x130 + i*0x21C, for i < (s16)[mgr+0x12C].
+
+HOST, each tick, for every slot i:
+- Skip the slot if (u16)[v+0x2C] == 0xFFFF. That means it is not spawned (0x80E00 checks this; phLevel DeleteObject 0x2AD320 sets it).
+- Otherwise send:
+  - slot index i
+  - type identity: [v+0x138], sent as an index into mgr+0x30
+  - the 48-byte matrix at v+0x34..0x63: right +0x34, up +0x40, -forward +0x4C, position +0x58/+0x5C/+0x60
+  - front point v+0xC8 (vec3), heading v+0xD4 (vec3), speed v+0xE0 (float)
+  - wheel spin u16 v+0x140, steering u16 v+0x144, light bits u8 v+0x146 / v+0x148
+  - paint/variant byte v+0x16C. The draw reads it at 0x74FB7, and on spawn it comes from the shared RNG at 0x797F0, so it differs between machines. Send it.
+  - model variant byte v+0xB5
+  - whether v+0x13C != 0 (crashed / physics-driven)
+  - for semi trucks (v+0xEC != 0), the trailer pose: [v+0xEC]+0x13C..+0x168 (rows +0x13C/+0x148/+0x154, hitch +0x160)
+  - optionally the road link as an index: ([v+0xFC] - [[0x5587E0]+0x3C]) / 0x14, same for +0x100, plus spline t at v+0xF0.
+- Slot-to-type is fixed by Init 0x6C840, which runs the same way on both machines, so the same slot index has the same type and model on both. Only which slots are active differs.
+
+PARTNER, simplest data-only puppet ("unlinked puppet", option A):
+- For every pool slot that is active locally ((u16)[v+0x2C] != 0xFFFF), write on every tick:
+  - [v+0xFC]=0 and [v+0x100]=0 (no road link)
+  - keep [v+0xC4] != 1, and leave [v+0xEC] alone
+  - [v+0xB1]=0 (forces the every-frame loop 1 of 0x80E00)
+  - [v+0x14E]=0
+  - optionally [v+0xA8]=0 and [v+0xB8]=0
+- Why this works, from the asm:
+  - In 0x80D10, al = (+0x14B<0x7F && !+0x14E && +0xFC && +0x100) || +0xC4==1 is false, so it takes 0x72AD0. That only sets speed +0xE0=0, +0xB2=1 and the blinkers. It never touches the matrix, +0xC8 or +0xD4.
+  - The lane-change pass 0x6C190 skips vehicles with link 0.
+  - Despawn 0x6A5C0 returns 0 when +0xFC==0 && +0xC4!=1 && +0xEC==0, so the slot is never recycled.
+  - 0x80D10 still calls 0x2B74B0, which puts the vehicle in the room grid at its +0x58 position.
+  - 0x71BA0 recomputes +0xB1; that is why we keep writing 0.
+- Then write the host's values: +0x34..+0x63 (matrix) and the same into +0x74..+0xA3 (previous matrix), +0xC8, +0xD4, +0xE0 (the game zeroes it each frame; it only feeds GetVelocity 0x73EB0), +0x140, +0x144, +0x146, +0x148, +0x16C. For trucks, also write the trailer matrix at [v+0xEC]+0x13C..+0x168.
+- Host slot inactive but partner slot active: write a matrix far away (for example y = -500) so it is neither seen nor hit.
+- Host slot active but partner slot not yet active: we cannot spawn it without calling code. Leave the partner's spawner (0x6C9B0) running. Unlinked puppets never despawn, so it keeps filling free slots, which we then take over. If needed, raise its target: the density words at mgr+0x68/+0x70 (+4*(players-1)) or +0x78/+0x7C in network mode (GUESS).
+- Optionally set mgr+0x19C=0. That globally disables the lane-change pass (gate at 0x6CBF9).
+
+ALTERNATIVES:
+- Option B, freeze everything: write byte mgr+0x144=1. 0x6CC90 (at 0x6CCAF) and 0x6CBC0 return immediately, so there is no spawn, despawn, move, LOD, room update or traffic audio. Then only write the matrix. The active set is frozen, and room and physics-cell membership go stale.
+- Option C, keep the game's own drive path so it calls phLevel UpdateObjectLocation (vtable+0x20 at 0x78AC0) and moves the trailers (0x76980):
+  - keep the partner's own valid +0xFC/+0x100
+  - write a degenerate spline: +0x104 = host front point (copied from host +0xC8), +0x110..+0x133 = 0, +0xF0 = 0, +0xF4 = 0
+  - write +0xC8 = front point, +0xD4 = heading, +0xB2 = 0, +0xE0 >= 0.1
+  - Result: 0x75E20 evaluates the spline (0x73C20) to the same point, keeps the heading, and 0x767B0 rebuilds the matrix from +0xC8/+0xD4 with up forced to (0,1,0).
+  - Risks: a one-frame snap if a lane change (0x6B6F0) or link switch fires, and despawn by 0x80C10 when +0xC8 is outside every partner focus region.
+
+COLLISION:
+- Every spawned vehicle is an inactive object (state 2, [[0x5580F0]+0x20][idx]) in the physics level. Its matrix is the phInst matrix (phInst = v+0x24, matrix at phInst+0x10 = v+0x34). So writing +0x34 moves the collision shape.
+- In option A nothing re-bins it in the level's cells, because UpdateObjectLocation is only called from the drive path. Whether a puppet that moved far from where it spawned still collides must be tested at runtime.
+- A hard hit gives the vehicle a collider from the manager pool (0x734E0 -> v+0x13C), and then 0x79BB0 lets physics drive it. While v+0x13C != 0, stop writing the matrix (or accept the local crash) and resume once it is back to 0.
+VERIFY recipe_ok=False fix: Option A (unlinked puppet) is correct for ordinary cars. Every gate it relies on matches the asm: 0x80D10 at 0x80D34..0x80DD2, 0x72AD0, 0x6A5C0, 0x6C480, 0x6C1E0 (lane change skips +0xFC==0), loop 1 of 0x80E00 with +0xB1<2, and the room update 0x2B74B0. The per-type free list (0x7DFB0/0x7E300) also means a taken-over slot is never handed out again. Three fixes are needed.
+
+(1) Semi trucks (type+0x294==6). Init 0x71AC0 (0x71B57..0x71B7B) allocates the trailer into +0xEC once, and it stays non-zero. So for truck slots the claim "unlinked puppets never despawn" is false. 0x80C10 -> 0x6A5C0 -> 0x79AB0 despawns them as soon as their +0xC8/+0xD0 point is outside every partner focus region (and the render node is linked). They also still run loops 2/3. On the partner, for truck slots: keep +0xC8/+0xD0 written to a point inside a partner focus region (impossible when the host truck is far away). Otherwise accept that the slot despawns and gets re-taken after the spawner reuses it, or hide it like an inactive slot. Do NOT zero +0xEC: it is the trailer object and the draw/trailer code dereference it.
+
+(2) Lights. 0x72AD0 masks +0x146 &= 1 every frame, so only bit0 and +0x148 survive. Do not count on writing hazard bits.
+
+(3) Model variant. +0xB5 picks the phInst bound only once, at Init (0x2A4740). Writing it later does not change collision. Instead, check at runtime that host and partner got the same +0xB5 for each slot.
+
+Also note:
+- The spawner and the lane-change pass only run offline or as session host (0x6C9F0..0x6CA09, 0x6CC07..0x6CC1C). The co-op's setup+0x108 = 0 keeps the partner's spawner running, which the recipe needs. Do not turn on the network flag.
+- 0x80C10 sets +0x16D=1 even when despawn is refused. That is harmless while the slot stays unlinked, but it means a later 0x79AB0 call (for example after a collision, through 0x794D0) will go to the full 0x796B0 path.
+- AddObject at spawn is (inst, ebx, 0xF), not (inst, 0, 0xF). Only Init uses 0.
+  VERIFY wrong: Recipe detail: writing +0x146/+0x148 light bits on the partner -> Expect +0x146 bits 1..7 to be reset every frame by 0x72AD0. Either accept the flicker, or keep +0x14E != 0 / +0x14B >= 0x7F so 0x72AD0 takes the hazard branch (which ORs in 0x06). In practice, send only +0x148 and the bit0 blink.
+OPEN: ["In option A (unlinked puppet) nothing calls phLevel UpdateObjectLocation (vtable+0x20 = 0x2AC1B0; state 2 re-bins only when the cell changes). Does the player's car still hit a puppet after it moves far from its spawn cell? Needs a runtime test: write a puppet's matrix about 200 m from where it spawned and drive into it.", "Who fills the focus list [[0x5587E0]+0x5C] (functions near 0x2BA2D0..0x2BA930), and does it get one entry per human car (slot 1 included)? This decides LOD tier and despawn on the partner and is the multi-centre question.", "Spawn target on the partner: 0x6CC90 compares mgr+0x80 with [mgr+0x68/+0x70 + 4*(players-1)] (or +0x78/+0x7C in network mode). Are these resource density values that can be raised to the pool size so every slot gets activated and can be taken over?", "When the partner hits a puppet, 0x734E0 attaches a collider and 0x79BB0 drives it from physics until 0x794D0 returns it to traffic. Should the mod stop writing while +0x13C != 0, or force it back? There is no data-only way to stop activation without touching phLevel state bytes.", "Option C (degenerate spline) was traced statically only. Confirm at runtime that 0x782A0/0x72670/0x724B0 tolerate the overwritten spline and that 0x75E20 keeps +0xF4 at 0 (it takes the ucomiss/lahf zero-length branch at 0x76021..0x76043).", "Model variant +0xB5 is fixed at Init for type kind 6 (0x7B6D0) and is 0 otherwise. Check whether 0x7B6D0 uses the shared RNG 0x4B2D00 and so differs between host and partner for the same slot."]
+==================== update-freeze
+RECIPE: PARTNER-SIDE PUPPET RECIPE (data only). Pointers: mgr = [[0x50152C]+0x08]; N = s16 [mgr+0x12C]; veh(i) = [mgr+0x130] + i*0x21C.
+
+Approach: put every locally active ambient car into the game's own "scripted car whose route has ended" state (+0xC4=1, +0xAC=0). The game still runs 0x78940 for that car every frame. That path zeroes the speed and leaves the path inputs alone, then rebuilds the matrix from +0xC8 (anchor) and +0xD4 (heading) (0x767B0), calls phLevel UpdateObjectLocation ([0x5580F0] vt+0x20 on +0x2C), and re-bins the car in [0x5587D8] (0x2B74B0). It never recycles the car (0x80C10 and 0x79AB0 both skip C4==1). So the mod writes the inputs, and the game keeps drawing, collision broadphase and proximity bins correct.
+
+ONCE, when the partner enters the race:
+- byte [0x4AFCCC] = 0. This is the only gate of the spawner 0x6C9B0. Optional: leave it on for a short warm-up so more local slots become active.
+- byte [mgr+0x19C] = 0. This turns off the random lane-change planner 0x6C190.
+
+HOST, every tick, for each i < N where u16 veh+0x2C != 0xFFFF (active), send:
+- i and the type (ptr veh+0x138, or its index in the array at mgr+0x30);
+- the 3x4 matrix veh+0x34..+0x63 (right +0x34, up +0x40, row c +0x4C, pos +0x58);
+- speed: f32 +0xE0 when +0x13C == 0. When +0x13C != 0 the car is a physics wreck: send |[[+0x13C]+0x10]+0x44| instead;
+- f32 type+0x298 (or read it locally, since the type is the same);
+- byte +0x14B (damage), byte +0x14E (disabled).
+The sender must use the matrix and not +0xC8/+0xD4, because those are stale while the car is physics-active.
+
+PARTNER, every tick, for each local slot with +0x2C != 0xFFFF:
+1. Skip the slot if dword +0x13C != 0 (a local rigid body is driving it) or dword +0xA8 != 0 (race-scripted car).
+2. Map it to a host car: same slot index if host slot i is active, otherwise any unassigned host car of the same type ptr +0x138. A slot's model is fixed at Init 0x71AC0.
+3. Writes, in this order:
+   a. dword +0xC4 = 1
+   b. byte +0xAC = 0
+   c. byte +0x14E = 0
+   d. byte +0x14B = min(host14B, 0x7E)
+   e. H = -(host row c) → f32[3] +0xD4/+0xD8/+0xDC
+   f. host up row → f32[3] +0x40/+0x44/+0x48. This is only a hint; 0x767B0 orthonormalizes it.
+   g. host pos + H*[[veh+0x138]+0x298] → f32[3] +0xC8/+0xCC/+0xD0
+   h. optional: the whole host matrix → +0x34..+0x63, so the pose is right even on a frame where 0x78940 is skipped
+   i. LAST: f32 +0xE0 = max(hostSpeed, 0.1). The guest zeroes it every frame (0x72570). Speed >= 0.1 is what makes 0x80D10 call 0x78940, the path that rebuilds and relocates. Speed also drives wheel spin (+0x140).
+4. Partner cars that have no host match (GUESS): write the same fields with the anchor moved about 500 below the road at the same xz, so the car stays inside the phys grid but cannot be seen or hit. Or leave them as local ambient traffic (C4=0).
+5. Leaving the race: write +0xC4 = 0 on every puppet so the game can recycle it again, and restore [0x4AFCCC] = 1 and the saved byte at mgr+0x19C. Reset 0x6C5D0 / clear 0x6C480 handle the rest.
+
+OPTIONAL, against local physics (GUESS):
+- A crash on the partner side makes a local rigid body (+0x13C). This happens through PrepareForActivation 0x777E0, the player-0 handler 0x6AFC0/0x6AEC0, or puppet-vs-puppet 0x77690. Those cars then ignore the writes until 0x794D0 releases them.
+- To refuse activation: keep dword [[mgr+0x128]+0x04] (body free-list head) = 0. Save the old head first, and restore it on exit.
+- Release 0x70F40 appends to the tail [+0x08], so the chain stays intact. If you see a non-zero head while blocking, adopt it as the saved head.
+- Expected effect: the partner bounces off traffic as if it were fixed, while the host's knock-back still arrives by the sync.
+
+QUICK TEST ALTERNATIVE: byte [mgr+0x144] = 1 freezes the whole traffic update (0x6CCAF / 0x6CBC3), then write the matrices directly. The cars stay drawn (GUESS), but the phLevel cell, the proximity bins and the LOD stop updating, so collision fails once a car crosses a 50 m cell. Physics wrecks and the [0x501544] subsystem also freeze.
+
+LIMITS:
+- Turn and brake lights are lost: 0x78940 does +0x146 &= 1 at the start, and 0x72A30, which sets bits 0x02/0x04/0x08, is not called on the C4 path.
+- Cars far from the partner (LOD >= 2) only update in slices, so they look choppy.
+VERIFY recipe_ok=False fix: Most of the recipe holds up against the asm: the C4=1/AC=0 puppet state, anchor = pos + (-rowC)*type[+0x298], D4 = -rowC, speed >= 0.1 written last, gate byte [0x4AFCCC]=0 and mgr+0x19C=0. It needs these changes:
+(1) Step 1 skip filter: also skip, or hide, any slot where dword +0xFC == 0 or dword +0x100 == 0. Check this every tick. Rigid-body release 0x794D0 can set +0x100=0 and +0x14E=1 (0x79662/0x79682). If the mod then clears +0x14E (step c), 0x76250 dereferences [+0x100]+8 at 0x76438.
+(2) Step 5 ordering: write +0xC4=0 on every puppet BEFORE the race-end clear 0x6C480 or the reset 0x6C5D0/0x7A190 runs. Both skip despawning C4==1 cars, and so does 0x80C10. Do it on the first sign the race is ending, or when the traffic manager pointer changes. Otherwise the puppets leak as frozen, still-drawn cars.
+(3) Body-pool block (optional): restore the saved free head only if the pool was not re-initialized by 0x70FE0 (head/tail rebuilt) in the meantime, for example by comparing the tail and active list. Otherwise drop the saved head.
+(4) Clarification: 0x79AB0 is not inert for C4==1 cars. It still releases a rigid body and zeroes +0xB8 before returning.
+(5) The mod thread is not frame-locked. On a game frame with no fresh write, speed is 0, so 0x766F0 runs and may set +0xB2=1, which skips 0x78940 and leaves the pose stale for that frame. That is only a stall, not a fight. Step h (writing the full matrix) covers the drawing for that frame, but not the phLevel cell.
+Unverified: the type match by slot index, whether a refused activation acts as a fixed obstacle, and the region-list multi-centre lead.
+  VERIFY wrong: C4==1 blocks every recycle path (0x80C10 early return; 0x79AB0 refuses; clear-all 0x6C480 uses 0x79AB0) -> 0x80C10 returns at 0x80C33 when C4==1. 0x79AB0 releases the body and clears +0xB8, then returns or goes to 0x796B0 when C4==1 / AD / A8. 0x7A190 and 0x6C480 do NOT despawn C4==1 cars. The mod must write C4=0 BEFORE the race-end clear/reset runs.
+  VERIFY wrong: NEW: puppet path dereferences +0x100 without a null check -> Only puppet slots with dword +0xFC != 0 AND dword +0x100 != 0. Re-check this every frame, since a body release can zero +0x100. Hide or ignore any slot that fails.
+OPEN: ["Where is manager +0x80 incremented? The spawner compares it with the density target from +0x68..+0x7C, but 0x6CC90 resets it to 0 and no increment was found. It decides whether forcing more partner slots active (warm-up) is possible by raising the targets.", "Where does the renderer draw ambient cars (the traversal of the +0x10 render list)? Is drawing skipped for LOD 4 or for cars outside the region cells?", "If phLevel PrepareForActivation (0x777E0) returns 0, is the traffic car treated as a fixed obstacle (the partner bounces off it), or is the contact dropped?", "0x763FB (the 0x76250 look-ahead used when +0xC4==1 and +0xA8==0) reads +0xFC. Check it is safe when a puppet sits far from its link, and that keeping the original +0xFC never asserts.", "Who fills the region list [[0x5587E0]+0x5C] (entries at +0x14, count +0x18, flags +0x08+i)? Is a second human car (slot 1) already an entry? Needed for the multi-centre spawning question.", "Do both machines assign the same type to each pool slot (Init order 0x6C840/0x71AC0, same resource)? Needed if the host/partner mapping is by slot index instead of by type ptr +0x138."]
+==================== spawn-centre
+RECIPE: ANSWER: The traffic is not centred on one car. It uses one "traffic region" per human player. With setup+0x4C = 2 and setup+0x108 = 0, the host's traffic already spawns and keeps cars around player 1 (the partner car driven by data writes). The only condition is that player 1's car position, the matrix at phInst+0x10, is kept up to date on the host. Region 1 then follows it on its own every frame.
+
+HOW IT WORKS (all static analysis):
+- RS = [[0x5587E0]+0x5C]. This is the region set: 0x38 bytes, vtable 0x47609C, built in 0x2B8B20 -> 0x2BA740.
+  - RS+0x18 = active region count. The player-manager ctor sets it to settings+0x4C (0x2BE210 -> 0x2B8CF0).
+  - RS+0x14 = array of 8 regions, 0x0C bytes each. Region i = [RS+0x14] + i*0xC: +0 vtable 0x4760B4, +4 pointer to 3 circles, +8 lookahead.
+  - Each circle is {cx, cz, r} (2D, x/z), at C+0x00, C+0x0C, C+0x18.
+  - Default radii are 175/275/350 (ring0/ring1/ring2). Race modes reset all regions' radii via 0x2B8D50, e.g. 125/175/210.
+- Every frame, each player's update 0x2C1520 calls 0x2B8D60(region = player+0x5C (= slot index), matrix, lookahead) at 0x2C17B9.
+  - The matrix is [[player+0x14]+0x1C]+0x10, the phInst matrix; position at +0x24 (x) and +0x2C (z).
+  - The lookahead is [[player+0x14]+8]+0xB0, the car speed.
+  - 0x2BC410 puts ring0 on the car, and rings 1 and 2 1.5*lookahead ahead (local -Z).
+- Every consumer loops over all RS+0x18 regions:
+  - Road-segment candidate scan 0x2BA610/0x2BA2D0: a segment is a candidate if it is inside ring1 (plus its radius) of any region.
+  - Spawn placement 0x6AA30: the point must be outside ring0 of every region and inside ring2 of a region.
+  - Recycle 0x80C10: a car is kept if it is inside ring2 of any region (ring1 if veh+0x14E), otherwise 0x6A5C0 recycles it.
+  - LOD 0x6A030 -> veh+0xB1: minimum distance to any region centre.
+  - AI OutsideTraffic 0x1EA030: loops over player count.
+- The pool is shared. The spawn budget is [mgr+0x68] (1 viewport; +0x70 when setup+0x08==2; +0x78/+0x7C in network). Reset 0x6C5D0 sets +0x68..+0x74 to the pool size +0x12C. So two distant players split the same pool, roughly half each.
+
+HOST RECIPE (data only):
+1. Set setup+0x4C = 2 before the race and player manager are built. Keep setup+0x108 = 0, setup+0x50 = 1, slot1+0x26 = 0.
+2. Each tick, write the partner car's phInst matrix (+0x10..+0x3F, position at +0x34/+0x3C). Optionally write car+0xB0 (speed) so rings 1 and 2 lead the car.
+3. Runtime check: [RS+0x18] == 2. Region 1's circle floats ([[RS+0x14]+0x0C+4] +0/+4, +0xC/+0x10, +0x18/+0x1C) must follow the partner.
+4. Fallback if player 1 does not exist or its update does not run: write RS+0x18 = 2 (8 regions allocated, so up to 8 is possible). Then write region 1's 3 circle centres (keep the radii) from the mod thread every tick. Nothing else overwrites a region whose player is missing, and the spawn, recycle and LOD code all read RS+0x18. If the count is 2 but region 1 is never updated, the host spawns phantom traffic at world (0,0).
+5. Do not set setup+0x50 = 2. With 2 viewports, 0x1DE4B0 -> 0x6A640 zeroes a finished player's radii, and the budget index changes.
+
+PARTNER RECIPE:
+- Freeze the local traffic logic with byte [[0x50152C]+8]+0x144 = 1. It is read at 0x6CCAF (update exits at 0x6CCB7) and 0x6CBC3, and it is otherwise only copied from the resource. This stops spawn, recycle, lane AI, per-vehicle update and LOD.
+- Side effect: it also skips the tail call to 0x6F490 ([0x501544]). Then write the host's per-slot states into the same +0x130 pool slots.
+- Spawn-only alternative: global byte [0x4AFCCC] (initial 1, only reader is 0x6CA0F) = 0. This stops 0x6C9B0 from spawning, but the existing cars keep moving.
+
+NETWORK PATH COMPARISON (setup+0x108 = 1):
+- Remote slots (slot+0x124 == -1) take 0x2C0540 and return before 0x2C17B9, so their regions are never updated.
+- Spawning in 0x6C9B0 (0x6C9F0..0x6CA09) and lane AI 0x6C190 (gated in 0x6CBC0 by mgr+0x19C) run only when session+0x10 < 0, or when session+0x10 == session+0x18 != -1 (the session host).
+- The budget comes from +0x78/+0x7C.
+- So the real network mode is already host-authoritative for spawning. No traffic network replication was found. The game's own multi-player traffic support (one region per player) works as-is in the non-network 2-human path.
+VERIFY recipe_ok=True fix: The recipe stands. One minor correction and two additions:
+(1) In the split-screen note (step 5), 0x1DE4B0 -> 0x6A640 zeroes the region with the player slot index i (0x1DE52B push esi happens before the imul), not the slot+0x128 HUD number. Keeping setup+0x50 = 1 still avoids this.
+(2) Slot-for-slot sync needs host and partner to build the same pool. 0x6BD20 picks the types from [0x4B3714 + setup+0x04*4], so setup+0x04 (time of day/weather) and the city must match on both sides. Then the +0x12C count and the type order in +0x130 match.
+(3) The fallback 'write RS+0x18 = 2 and drive region 1 by hand' is consistent with the asm. Also note that with RS+0x18 >= 2 the spawn pre-gate 0x2BA2A0 always passes, because it reads RS+0x28 = 0x0C, which is harmless.
+Everything the analyst marked CONFIRMED was re-verified in the asm and the XBE data: constants 175/275/350/1.5/50.0, vtables 0x47609C and 0x4760B4, and [0x4AFCCC] = 1. Freezing with mgr+0x144 stays a GUESS for its render and collision side effects.
+  VERIFY wrong: Split-screen: when settings+0x50 > 1, 0x1DE4B0 zeroes the finished player's region radii, region index = slot+0x128 HUD number -> The region index is the player slot index i (0x1DE52B push esi before the imul), not slot+0x128. This still only happens when setup+0x50 > 1.
+OPEN: ["Runtime check needed: on the host with setup+0x4C=2, read RS=[[0x5587E0]+0x5C]. Confirm [RS+0x18]==2 and that region 1's circle floats ([[RS+0x14]+0x0C+4]) follow the partner car once its phInst matrix is written.", "What car+0xB0 is (assumed to be speed in m/s), the region lookahead. If the mod writes only position, it may stay 0, which centres rings 1 and 2 on the car (still fine).", "Where the active-count field manager+0x80 is incremented. It is reset each frame at 0x6CCD9 and compared to the budget, but its writer was not found.", "Network budgets +0x78/+0x7C and LOD thresholds +0x158..+0x164 come from the city _traffic resource. Their values need a runtime read.", "Where race AmbientDensity (race-list +0x04) and RO_Traffic_Density (0x165ED0 name table) actually scale traffic: segment+0x20, mgr+0xA8 or mgr+0x108 (max spawns per pass) are candidates.", "Does freezing with manager+0x144=1 on the partner still let written ambient cars render and collide (render path, LOD +0xB1, veh+0x58 vs +0xC8 position copies)? It also skips the 0x6F490 emitter update.", "No network replication of traffic was found for real online play (only the host spawns). Whether clients in the original online mode had traffic at all is unknown.", "The type 4/5 road segment class used for the per-player flags in 0x2BA360/0x2BA2D0 (maybe freeway or tunnel) is unnamed. Also check the [[0x5587E0]+0x58]+0x30 count gate, which leaves the flags at their initial 1 when it is 0."]
+==================== pool-identity
+RECIPE: GOAL: same pool layout on both copies, then mirror slots host -> partner. All addresses are guest VAs. tm = traffic manager = [[0x50152C]+0x08].
+
+A. READY + SAME CITY CHECK (both copies, poll each tick, read-only)
+1. root=[0x50152C]!=0; tm=[root+0x08]!=0. During a city reload 0x6D9F0 first writes [root+8]=0 (0x6DA78), then sets it again after the load (0x6DAC6). Treat tm==0, or tm differing from last tick, as "reloading".
+2. [tm]==0x44CE90 (vtable set by fixup 0x6D4B0); byte [tm+0x118]==1 (in-place loaded).
+3. n=s16[tm+0x12C]>0; pool=[tm+0x130]!=0; dword[pool-4]==n (vector-new cookie written by Init at 0x6C8E4; the in-file pool has no cookie); [pool]==0x44D1CC (slot vtable); dword[tm+0x13C]==n/30+1 (Init writes it last, at 0x6C9A0). When all of these hold, Init 0x6C840 has finished.
+4. City: city=dword[[0x53F2E0]+0]; name=[[0x557EE4]+city*0x50] (0x2693F0). Also check that settings+0x10B (traffic on) and +0x10F (in-place load) are equal on both copies.
+5. Layout fingerprint, built once per load: n; T=u16[tm+0x34]; then for each slot i (addr=pool+i*0x21C): typeIdx(i) = index j where [[tm+0x30]+4j]==[slot+0x138], and variant(i)=s8[slot+0xB5]. Also per type: cap=u16[[type+0x5C]+6]. Hash it (CRC) and send it in the handshake. Mirroring may start only when the hashes are equal. They will be, because Init is deterministic (see findings). If they differ (different city, mod or resource), fall back to "no traffic sync".
+
+B. HOST, per tick (or 20-30 Hz), for every slot i in 0..n-1:
+- active = ([slot+0xFC]!=0) || (dword[slot+0xC4]==1) || ([slot+0xEC]!=0). This is the same test as despawn 0x7A190 and the slice routine 0x6C190. Also send u16[slot+0x2C] != 0xFFFF (registered with the renderer) as a 'visible' bit.
+- transform: 12 floats at slot+0x34..+0x63 (3x4: rows +0x34/+0x40/+0x4C(forward), position +0x58/+0x5C/+0x60). Optionally also +0x74..+0xA3 (previous-frame copy).
+- motion: f32 +0xE0 (speed, GUESS), f32 +0xF0 (parameter along the current road segment), ptr +0xFC/+0x100 sent as road-segment INDEX = (ptr-[[0x5587E0]+0x3C])/0x14 (stride 0x14, see 0x75BC0), +0xC8 vec3 road point, +0xD4 vec3 road tangent.
+- appearance: u8 +0x16C (colour 0..7, RANDOM per spawn), u8 +0x16E (mode 0..3, RANDOM per spawn), u8 +0xB1/+0xAD/+0x14C state bytes (GUESS). Type and variant are NOT sent each tick; they are fixed by the layout hash. Send the type index once, only as an assert.
+- Compact packet: {u16 idx, u8 flags(active,visible), u8 colour, f32[12] matrix, f32 speed} is about 56 B per slot. Delta-send only slots that are active or changed.
+- Race-scripted vehicles (separate vector V=[tm+0x20]: ptr=[V], count=u16[V+4], stride 0x21C): send the same record keyed by 'S'+index, but only when both copies are in the same race.
+
+C. PARTNER
+- Write colour byte +0x16C on every slot the host reports. The draw code reads it each frame: 0x78ED5 movzx [drawable+0x148] = slot+0x16C, then indexes type+0x1FC+c*12. So the colour matches immediately.
+- Write the matrix +0x34..+0x60 (and +0x74.. prev) and +0xE0 after the game's own update each frame. The renderer draws from the drawable at slot+0x24, whose matrix is at drawable+0x10 = slot+0x34 (GUESS by pattern).
+- Stop local movement: byte [tm+0x144]!=0 makes BOTH the traffic update 0x6CC90 (test at 0x6CCAF) and the slice update 0x6CBC0 (0x6CBC3) return at once. No code ever writes it (only a copy at 0x6D20A), so it is a free freeze switch. The cost: no spawn/despawn and no renderer re-registration either. So on the partner you can only show slots that are already spawned locally. A slot the host spawns that is free on the partner has no render handle (u16 +0x2C==0xFFFF) and cannot be made visible by data alone. Practical hybrid: leave +0x144=0 so the partner's logic keeps spawning/registering, but overwrite matrix/colour/speed every tick (last writer wins). Partner slots the host says are inactive: move them to the host's position or under the map (GUESS). Validate with a test.
+- Alternative lead (GUESS): the game's own network traffic is host-authoritative. In 0x6CBC0, if byte [tm+0x19C]!=0 and the session [0x557EFC] has +0x10>=0 and +0x10!=+0x18 (not host), it skips 0x6C190 (per-vehicle random turn/route choice at junctions, which uses the global rand at 0x6C2EF..0x6C30F). That check does NOT test settings+0x108. So writing tm+0x19C=1 and session +0x10=1/+0x18=0 on the partner would suppress local random routing, but session fields are shared with other code: risky.
+
+D. VALIDATION (both copies)
+- Handshake: equal layout hash (A.5) and the same city index/name.
+- Runtime: every N seconds the host sends CRC(colour bytes + active bits). The partner computes the same CRC after its writes. Optionally the partner reports the max |pos_partner(i) - pos_host(i)|.
+- Re-handshake after any race start: Reset 0x6C5D0 (called from game-state entry 0x1EFE0 and 0x15A1E0) despawns every slot (0x7A190), sorts each type's free/used lists (0x7E140 qsort with comparator 0x7B890), and clears the scripted vector count. Layout is unchanged, but all slot states restart.
+
+E. DO NOT RELY ON SEEDS
+The traffic RNG is the shared MSVC-style global rand [0x4B2D00] (x*0x343FD+0x269EC3, >>16 &0x7FFF, inlined). It is also used by AI, race scripts, career, physics etc. It is reseeded at each race-state entry as seed = rand15(previous state), stored at [[0x4CBAE0]+0x14] (0x21170 -> 0x23DC0 -> 0x2D960; the replay restore is 0x2D900 / 0x212E0). Only 32768 seeds are possible. The second RNG [0x4B2D04] (used for +0x16E) is advanced by dozens of other systems and seeded from [0x534768] in 0x134BD0. Writing equal seeds will not keep the copies in lockstep, because consumption depends on each player's local state. So send colour and state per slot.
+VERIFY recipe_ok=False fix: 1) Layout source: the type table and n are rebuilt in Init by 0x6BD20 from tune/traffic/<city>/<city>_<tod>.density. tod = [0x4B3714 + 4*[[0x53F2E0]+4]] (dawn/midnight/dusk). The fallback is va_civic_sh x300. The handshake must compare city AND setup+0x04 (time of day) before the layout hash. Keep the hash: it is the real guard.
+2) The 'alternative lead' in C is inverted. 0x6C190 is a cross-street SPAWNER, gated as: run only if byte tm+0x19C!=0 AND (offline OR host). To suppress it on the partner, write tm+0x19C=0. Never write session [0x557EFC] fields.
+3) Overwriting the matrix with tm+0x144=0 does not work as written. The per-vehicle update 0x767B0 (via 0x6CBC0 -> 0x81030 -> 0x80E00 -> 0x80D10 -> 0x78940) rebuilds +0x34/+0x4C and the position +0x58/+0x5C/+0x60 from the road point +0xC8 and the tangent +0xD4 on every update. A ~60 Hz mod thread that is not synchronised will race with it and jitter. Pick one:
+(a) Freeze with byte tm+0x144=1. Then nothing rewrites the matrix, but there is no spawn/despawn or renderer (re)registration. Only slots whose u16 +0x2C != 0xFFFF are drawn.
+(b) Keep the update running and write the host's ROAD state instead of the matrix, so the game recomputes the same matrix and dead-reckons between packets: +0xFC/+0x100 = [[0x5587E0]+0x3C] + segIdx*0x14, +0xF0 param, +0xF4 step, +0xE0 speed, +0xC8/+0xD4. Combine (b) with tm+0x19C=0. The partner's own spawner 0x6C9B0 and the distance despawns will still run around the partner, so mismatches remain. GUESS: untested.
+4) Free slots on the partner: list0 is a pointer array ([type+0x5C]+0, u16 count +4) and spawns take the last entry. Reordering it is a data-only way to steer which slot the next local spawn uses (GUESS).
+5) Spawn centres (lead for the multi-player question, not verified in depth): 0x6A030 (called from 0x71BA0 to set slot+0xB1, the distance band) takes the min XZ distance over a LIST of centres. The list is [[[0x5587E0]+0x5C]+0x14], with 12-byte entries, count dword at +0x18, element i via 0x2BA270, and entry+4 -> {x,z}. The bands are compared against tm+0x158/+0x15C/+0x160. Several centres are therefore already supported. Find who fills that list before relying on writing it.
+6) Readiness: tm is published at 0x6DAC6 before the fixup and Init, so require a stable fingerprint over several ticks, not just tm!=0.
+  VERIFY wrong: Pool size +0x12C and the ambient type table (+0x30/+0x34) come from the in-place city traffic resource -> The layout is deterministic but keyed by (city name, time of day = [[0x53F2E0]+4] -> dawn/midnight/dusk, the tune/traffic density file, and the resource's own +0x12C start value). n = resource +0x12C + sum(density counts), or 300 by fallback. Both copies must also match on setup+0x04.
+  VERIFY wrong: Built-in host gating: with tm+0x19C!=0 and the local machine not host, 0x6C190 (per-vehicle random turn/route choice) is skipped; writing 0x19C=1 plus -> Writing byte tm+0x19C=0 on the partner disables the cross-street spawner 0x6C190 without touching the session. Writing 1 would ENABLE it when offline. Do not write the session fields.
+  VERIFY unclear: Ready/same-city: tm=[root+8] is zeroed during a reload; checks [tm]==0x44CE90, +0x118==1, [pool-4]==n, [pool]==0x44D1CC, +0x13C==n/30+1; city = [[0x53 -> Treat ready = the full layout fingerprint stays stable for several ticks AND [tm+0x130] differs from the relocated in-file value. Same-world = city index [[0x53F2E0]+0] AND time of day [[0x53F2E0]+4] equal, plus an equal layout hash.
+OPEN: ["Is u16 slot+0x2C the renderer handle, and does the world grid need re-binning when the matrix at +0x34 is written directly? The renderer [0x5580F0] vtable +0x80/+0x88/+0x18 is not traced. If writing the matrix while frozen (tm+0x144=1) does not move the drawn car, the partner must keep its update running and overwrite after it.", "Who calls traffic Init (vtable[2] 0x6C840)? It has no direct caller; it is assumed to be the generic resource post-load. If Init ran after a race lazily created types (0x6A7D0), those types would enter the pool too. Verify at runtime that the layout hash is equal after a career race load vs a free-roam load.", "Exact meaning of +0xE0 (speed vs target speed), +0x16E (0..3), +0xAD/+0xB1/+0x14C state bytes, and the crash/physics path (+0xEC, 0x796B0). Needed if hit traffic should look the same on both copies.", "How a network client in the original game receives traffic decisions when tm+0x19C is set. The skipped 0x6C190 output must arrive by some net message, which could be reused. Not traced.", "Free lists are LIFO (0x7DFB0 takes the last free entry), so the partner cannot make a specific free slot spawn by writing data. Making a host-active slot appear on the partner when it is free there is unsolved without guest calls."]

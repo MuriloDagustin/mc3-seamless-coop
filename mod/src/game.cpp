@@ -11,6 +11,7 @@
 #include "net/session.h"
 #include "overlay.h"
 #include "race.h"
+#include "traffic.h"
 #include "settings.h"
 
 extern std::atomic<uint32_t> g_xinput_calls;
@@ -37,8 +38,10 @@ void Loop() {
         next += milliseconds(16);
         try {
             coop::Frame();
-            if (GetTickCount64() - g_fiber_at > 250)  // no xinput polls (no controller): the race flow from here
+            if (GetTickCount64() - g_fiber_at > 250) {  // no xinput polls (no controller): the game work from here
                 race::Tick(coop::Hosting(), coop::PlayerCount() > 1 && coop::Networked());
+                traffic::Tick(coop::Networked() && !coop::Hosting(), GetTickCount64());
+            }
         } catch (...) {
             Log("game: session tick threw");
         }
@@ -71,6 +74,7 @@ void FiberTick() {
     g_fiber_at = now;
     try {
         race::Tick(coop::Hosting(), coop::PlayerCount() > 1 && coop::Networked());
+        traffic::Tick(coop::Networked() && !coop::Hosting(), now);
     } catch (...) {
     }
     busy = false;
@@ -87,7 +91,7 @@ std::string State() {
                   g_ticks.load(), g_xinput_calls.load(), dxgi::Presents(), coop::Status(), car::City(), have,
                   double(p.m[3][0]), double(p.m[3][1]), double(p.m[3][2]), double(-p.m[2][0]), double(-p.m[2][1]),
                   double(-p.m[2][2]), double(speed), double(p.throttle));
-    return std::string(s) + " " + race::Describe();
+    return std::string(s) + " " + race::Describe() + " " + traffic::Describe();
 }
 
 }  // namespace mod::game

@@ -29,6 +29,7 @@
 #include "net/coop_online.h"
 #include "net/session.h"
 #include "race.h"
+#include "traffic.h"
 #include "settings.h"
 
 // the game identity copies must share (the XBE's title, version and size, from the guest image), 40 characters
@@ -44,7 +45,7 @@ constexpr uint64_t kTimeoutMs = 5000;
 
 constexpr uint32_t kMagic = 0x4F43334D;  // "M3CO"
 constexpr uint16_t kProtocol = 1;
-enum Type : uint8_t { kHello = 1, kWelcome, kState, kBye, kDiscover, kOffer, kRoster, kFull, kCar, kRaceStart, kWon };
+enum Type : uint8_t { kHello = 1, kWelcome, kState, kBye, kDiscover, kOffer, kRoster, kFull, kCar, kRaceStart, kWon, kTraffic };
 
 #pragma pack(push, 1)
 struct Header {
@@ -381,6 +382,10 @@ void Receive(uint64_t now) {
                     mod::race::OnPartnerWon(wp.serial, wp.prize);
                 }
                 break;
+            case kTraffic:
+                if (source == 0 && g_cfg.role == Role::Join)
+                    mod::traffic::Receive(in.raw + sizeof(Header), n - int(sizeof(Header)));
+                break;
             case kBye:
                 LOGR("coop: player %d left", source + 1);
                 if (g_cfg.role == Role::Host) Forget(source);
@@ -416,6 +421,19 @@ void Send(uint64_t now) {
             Type type = Type(h->type);
             *h = Make(type, i, now);
             SendTo(i, r.raw, r.bytes);
+        }
+    }
+    static std::vector<std::vector<uint8_t>> traffic;
+    if (g_cfg.role == Role::Host && PlayerCount() > 1 && mod::traffic::Snapshot(traffic, now)) {
+        Packet out;
+        for (auto& chunk : traffic) {
+            if (sizeof(Header) + chunk.size() > sizeof out.raw) continue;
+            std::memcpy(out.raw + sizeof(Header), chunk.data(), chunk.size());
+            for (int i = 1; i < kMaxPlayers; i++)
+                if (g_players[i].have && g_players[i].welcomed) {
+                    out.h = Make(kTraffic, i, now);
+                    SendTo(i, out.raw, int(sizeof(Header) + chunk.size()));
+                }
         }
     }
     if (g_cfg.role == Role::Host) {
@@ -506,6 +524,7 @@ void StartSession() {
 }
 
 void StopSession() {
+    mod::traffic::Stop();
     if (g_net)
         for (int i = 0; i < kMaxPlayers; i++)
             if (i != g_local_player && g_players[i].have) {
