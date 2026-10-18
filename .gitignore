@@ -1,0 +1,39 @@
+# build
+/out/
+/build/
+*.zip
+*.pdb
+*.exe
+*.obj
+*.o
+
+# recompiled code, derived from the game
+/generated/
+
+# user's own game files
+/assets/
+
+# runtime files
+mc3.toml
+/logs/
+/hdd/
+/CrashDumps/
+
+# editors
+.vs/
+.vscode/
+.idea/
+
+# Local temporary folder
+.local
+
+# Optional EOS SDK and local product configuration (never commit credentials)
+/third_party/eos/
+coop-online.toml
+EOSSDK-*.dll
+
+# test runs and captures
+/test-runs/
+/captures/
+__pycache__/
+*.dmp
