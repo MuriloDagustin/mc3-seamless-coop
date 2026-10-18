@@ -49,7 +49,45 @@ void NativeLocalFinish(bool won,int paid) {
     W32(race+0x1250,R32(race+0x1250)+1);W32(machine+4,7);
     G<uint8_t>(race+0x0E)=1;W32(rewards+0xBC,paid);
 }
+void SetupAuthorityTests() {
+    Fixture();
+    constexpr uint32_t db=0x150000,names=0x151000,name=0x152000;
+    W32(0x557EE4,db);W32(db+0x18,names);W32(names+7*4,name);
+    const char full[]="circuit\\easy\\same_prefix_but_complete_race_name";
+    std::memcpy(mod::HostPtr(name),full,sizeof full);
+    for(uint32_t s:{setup,next_setup})std::memcpy(mod::HostPtr(s+0x68),full,sizeof full);
+    mod::race::Start start{};start.serial=501;start.city=0;start.race_idx=7;
+    mod::race::OnStart(start);
+    mod::race::Setup authority{501,2,0xFFFFFF1F,100,0,0,7,{}};
+    int32_t model=69;std::memcpy(authority.opponents[0],&model,4);authority.opponents[0][4]=1;
+    std::memcpy(authority.opponents[0]+5,"vp_d_scion_tc_05_7",18);
+    mod::race::OnSetup(authority);
+    W32(race,0x46A7D8);mod::race::ApplyHostSetup();
+    assert(R32(setup+0x3D4)==0xFFFFFF1F && R32(next_setup+0x3D4)==0xFFFFFF1F);
+    assert(R32(setup+0x40)==100 && R32(next_setup+0x40)==100);
+    assert(R32(setup+0x274)==69 && R32(next_setup+0x274)==69);
+    auto stale=authority;stale.revision=1;stale.opponent_mask=0xF;
+    mod::race::OnSetup(stale);mod::race::ApplyHostSetup();assert(R32(setup+0x3D4)==0xFFFFFF1F);
+    authority.revision=3;authority.serial=500;mod::race::OnSetup(authority);
+    assert(mod::race::g_setup_in.serial==501);
+    // A setup for another filename must not be touched; already allocated opponents must not be resized.
+    G<uint8_t>(next_setup+0x68)='x';W32(next_setup+0x3D4,0xABC);
+    mod::race::ApplyHostSetup();assert(R32(next_setup+0x3D4)==0xABC);
+    W32(race,0x46B2D8);W32(setup+0x3D4,0xDEF);mod::race::ApplyHostSetup();
+    assert(R32(setup+0x3D4)==0xDEF);
+    // The host only sends a complete NEXT setup with the exact current race identity.
+    mod::race::BeginRace(502);mod::race::g_start_out=start;mod::race::g_start_out.serial=502;
+    std::memcpy(mod::HostPtr(next_setup+0x68),full,sizeof full);
+    W32(next_setup+0x3D4,0xFFFFFF1F);W32(next_setup+0x40,100);
+    mod::race::CaptureHostSetup();mod::race::Setup sent{};
+    assert(mod::race::TakeSetup(sent) && sent.serial==502 && sent.opponent_mask==0xFFFFFF1F);
+    assert(!mod::race::TakeSetup(sent));
+    puts("PASS: authoritative setup mask before allocation; full filename, generation and revision guards.");
+}
+#include "ai_memory_tests.inc"
 int main() {
+    SetupAuthorityTests();
+    AiMemoryTests();
     // the guest pad poll found in each known runner build, mapped as an image only (never run)
     struct Build { const wchar_t* path; uintptr_t rva; };
     for (const Build& b : {Build{L"D:/dev/mc3-coop-data/xrun/MC3Runner.exe", 0x305CB4},

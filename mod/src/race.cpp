@@ -67,6 +67,10 @@ bool g_prize_sent = false;
 uint32_t g_unsupported_race = 0, g_bound_race = 0;
 std::string g_last;
 bool g_challenge_input = false;
+Setup g_setup_out{}, g_setup_in{};
+uint64_t g_setup_send_at = 0;
+bool g_have_setup = false;
+uint32_t g_setup_applied_revision = 0;
 // Opt-in experiment: keep ReportRaceResult pending until the peer's terminal result is known.
 enum class GatePhase { Off, Guarding, Waiting, Replay, Done, Blocked };
 GatePhase g_gate = GatePhase::Off;
@@ -84,6 +88,10 @@ void BeginRace(uint32_t serial) {
     g_partner_won = g_out_won = g_won_sent = g_prize_sent = false;
     g_partner_prize = g_out_prize = 0;
     g_bound_race = 0;
+    g_setup_out = g_setup_in = {};
+    g_setup_send_at = 0;
+    g_have_setup = false;
+    g_setup_applied_revision = 0;
     const char* opt = std::getenv("MC3COOP_FINISH_GATE");
     g_gate_requested = opt && std::strcmp(opt, "1") == 0;
     g_gate = GatePhase::Off;
@@ -119,6 +127,64 @@ const char* RaceName(int city, int race_idx) {
     return name && Mapped(name, 32) ? static_cast<const char*>(HostPtr(name)) : "";
 }
 
+// Setup+68 is an inline filename, written by 26B8E0 before 28D580 finishes the opponent mask.
+// Match the full local database name, rather than Start.name's shortened display label.
+bool SetupMatches(uint32_t setup, int city, int race_idx) {
+    if (!Mapped(setup, 0x3D8) || int(G<int8_t>(setup)) != city) return false;
+    const char* expected = RaceName(city, race_idx);
+    if (!*expected) return false;
+    for (uint32_t i = 0; i < 128; i++) {
+        if (!Mapped(uint32_t(reinterpret_cast<const uint8_t*>(expected) - g_base) + i, 1)) return false;
+        uint8_t actual = G<uint8_t>(setup + 0x68 + i);
+        if (actual != uint8_t(expected[i])) return false;
+        if (!actual) return true;
+    }
+    return false;
+}
+
+void CaptureHostSetup() {
+    if (!g_race_serial || g_start_out.serial != g_race_serial) return;
+    uint32_t next = P(0x53F2E4);
+    if (!SetupMatches(next, g_start_out.city, g_start_out.race_idx)) return;
+    uint32_t mask = R32(next + 0x3D4), limit = R32(next + 0x40);
+    if (limit > 100) return; // 28D740 uses 100 as the unrestricted sentinel.
+    uint8_t opponents[8][0x2C]{};
+    for (uint32_t i = 0; i < 8; i++) {
+        uint32_t s = next + 0x274 + i * 0x2C;
+        int32_t model = int32_t(R32(s));
+        if (model < -1 || model >= 127 || G<uint8_t>(s + 4) > 1) return;
+        std::memcpy(opponents[i], HostPtr(s), 0x29); // exclude the three native padding bytes
+        opponents[i][0x27] = 0; // bound the inline name (35 bytes beginning at +5)
+    }
+    if (g_setup_out.serial && g_setup_out.opponent_mask == mask && g_setup_out.opponent_limit == limit &&
+        !std::memcmp(g_setup_out.opponents, opponents, sizeof opponents)) return;
+    uint32_t revision = g_setup_out.revision + 1;
+    g_setup_out = {g_race_serial, revision, mask, limit, g_start_out.city, 0, g_start_out.race_idx, {}};
+    std::memcpy(g_setup_out.opponents, opponents, sizeof opponents);
+    g_setup_send_at = 0;
+    Log("race: host setup serial %u revision %u mask=%08X limit=%u", g_race_serial, revision, mask, limit);
+}
+
+void ApplyHostSetup() {
+    if (!g_have_setup || g_setup_in.serial != g_race_serial) return;
+    // Once players/opponents exist, changing this mask cannot change the already allocated race.
+    if (!Cruise() && RaceState() >= 2) return;
+    bool wrote = false;
+    for (uint32_t global : {kSetupCurrent, uint32_t(0x53F2E4)}) {
+        uint32_t setup = P(global);
+        if (!SetupMatches(setup, g_setup_in.city, g_setup_in.race_idx)) continue;
+        W32(setup + 0x3D4, g_setup_in.opponent_mask);
+        W32(setup + 0x40, g_setup_in.opponent_limit);
+        std::memcpy(HostPtr(setup + 0x274), g_setup_in.opponents, sizeof g_setup_in.opponents);
+        wrote = true;
+    }
+    if (wrote && g_setup_applied_revision != g_setup_in.revision) {
+        g_setup_applied_revision = g_setup_in.revision;
+        Log("race: applied host setup revision %u mask=%08X limit=%u before opponent allocation",
+            g_setup_in.revision, g_setup_in.opponent_mask, g_setup_in.opponent_limit);
+    }
+}
+
 // the host: its cruise just started an open race
 void HostTick() {
     uint32_t career = P(kCareer), data = P(career + 0x0C);
@@ -141,7 +207,7 @@ void HostTick() {
     g_start_out = s;
     g_out_start = true;
     BeginRace(s.serial);
-    ai::SetRace(s.serial, s.city, s.race_idx);
+    ai::SetRace(s.serial, s.city, s.race_idx, true);
     Log("race: host starts %s (city %d race %d)", s.name, s.city, s.race_idx);
 }
 
@@ -233,8 +299,10 @@ void PartnerTick(uint64_t now) {
     if (std::memcmp(HostPtr(rec + 0x0B), s.record + 0x0B, kRecord - 0x0B)) {  // same race, the host's opponents
         std::memcpy(g_saved_fields, HostPtr(rec), kRecord);
         uint16_t task = G<uint16_t>(rec + 0x1E);
+        uint32_t task_name = R32(rec + 0x20);
         std::memcpy(HostPtr(rec + 0x0B), s.record + 0x0B, kRecord - 0x0B);
         G<uint16_t>(rec + 0x1E) = task;                                 // this career's own task
+        W32(rec + 0x20, task_name);                                     // never borrow a host pointer
         G<uint8_t>(rec + 0x24) = G<uint8_t>(rec + 0x24) & ~uint8_t(0x10);  // not 'new'
         g_fields_lent = true, g_fields_id = uint16_t(g_record_id);
         Log("race: this career's record of the race takes the host's opponents for this start");
@@ -514,8 +582,8 @@ void Tick(bool hosting, bool connected) {
         return;
     }
     if (now < g_lights_until) Headlights();
-    if (hosting) HostTick();
-    else PartnerTick(now);
+    if (hosting) { HostTick(); CaptureHostSetup(); }
+    else { PartnerTick(now); ApplyHostSetup(); }
     if (!Cruise() && g_race_serial) g_bound_race = P(P(kRaceHolder) + 4);
     else if (Cruise()) g_bound_race = 0;
     RaceTick(true);
@@ -532,7 +600,7 @@ void OnStart(const Start& s) {
     if (!s.serial || s.city < 0 || s.city > 3 || s.race_idx < 0 || s.race_idx >= 160) return;
     if (g_have_start && int32_t(s.serial - g_start_in.serial) <= 0) return;
     BeginRace(s.serial);
-    ai::SetRace(s.serial, s.city, s.race_idx);
+    ai::SetRace(s.serial, s.city, s.race_idx, true);
     g_start_in = s;
     g_start_in.name[sizeof s.name - 1] = 0;
     g_have_start = true;
@@ -574,6 +642,30 @@ bool TakeStart(Start& out) {
     g_out_start = false;
     out = g_start_out;
     return true;
+}
+
+bool TakeSetup(Setup& out) {
+    std::lock_guard lock(g_lock);
+    if (!g_setup_out.serial || g_setup_out.serial != g_race_serial) return false;
+    uint64_t now = GetTickCount64();
+    if (g_setup_send_at && now - g_setup_send_at < 100) return false;
+    g_setup_send_at = now ? now : 1;
+    out = g_setup_out;
+    return true;
+}
+
+void OnSetup(const Setup& setup) {
+    std::lock_guard lock(g_lock);
+    if (!g_have_start || setup.serial != g_race_serial || !setup.revision || setup.reserved ||
+        setup.city != g_start_in.city || setup.race_idx != g_start_in.race_idx || setup.opponent_limit > 100 ||
+        (g_have_setup && int32_t(setup.revision - g_setup_in.revision) <= 0)) return;
+    for (const auto& opponent : setup.opponents) {
+        int32_t model;
+        std::memcpy(&model, opponent, 4);
+        if (model < -1 || model >= 127 || opponent[4] > 1 || opponent[0x27]) return;
+    }
+    g_setup_in = setup;
+    g_have_setup = true;
 }
 
 bool TakeWon(uint32_t& serial, int32_t& prize) {

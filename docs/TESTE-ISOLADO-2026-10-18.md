@@ -45,3 +45,18 @@ Testado com `XRECOMP_NATIVE_CONTROLLERS=0`, `XRECOMP_KEYBOARD=1` (padrão do lan
 - Comparações devem ignorar handles do host sem road ativo: slots em reciclagem podem existir no host e ser corretamente ocultados abaixo do mapa no parceiro.
 
 A colisão de puppets deslocados entre células, caminhões, crashes e a entrada por teclado sem gamepad ainda exigem testes específicos. Vitória tardia e IA estão em desenvolvimento separado.
+
+## Handoff, item 1 — autoridade dos adversários (18/10, build novo)
+
+Teste com duas cópias próprias no desktop invisível, portas45803/45804, runner timestamp0x6AD5001B, native_controllers=0, keyboard=1 e áudio desabilitado. Outros processos de teste já abertos não foram encerrados. Controlador retém os handles dos processos que criou.
+
+- A máscara isolada não bastou: modelos de carros também divergiam entre carreiras. O host agora envia máscara+3D4, limite+40 e os oito registros inline de adversários+274 (modelo, habilitado, nome e variante). A entrega se repete a cada100ms, com geração/revisão; o parceiro só aplica antes da alocação e quando o nome completo inline do setup+68 corresponde à corrida. Nenhum ponteiro do host é importado; o Task* local+20 do registro da carreira é preservado.
+- Nomes cosméticos de pilotos saíram do hash de identidade. Modelo, vaga, tipo, pontos de largada e características da corrida permanecem verificados.
+- Rodada normal:4/4 adversários, applied=4 e erro máximo observado1,73m.
+- Rodada com diferença de contagem provocada no setup NEXT descartável do host: máscaraFFFFFF9F sobre7 vagas do arquivo, cinco habilitadas. Parceiro recebeu revisão2 antes da alocação e criou5, como o host. Inicialmente erro máximo3,45m.
+- A primeira tentativa de chegada revelou divergência de classificação após o parceiro terminar: o mod devolvia os adversários à lógica local no estado7. Corrigido para manter autoridade durante estados de resultado7..10. O snapshot terminal fica retido após o timeout normal, até troca de corrida/desconexão.
+- Repetição `python tools/ai_test.py 3 --host-port 45803 --partner-port 45804 --finish`: PASS. Cinco adversários em modo experimental, erros máximos das três amostras1,27m/0,72m/0,98m. Host terminou, parceiro continuou por mais de2s, depois também terminou. Colocações finais dos cinco adversários em ambas as cópias: [6,3,4,2,1], iguais em três leituras e na checagem posterior. Humanos locais terminaram em5º, remoto em7º; estado8 estável. Evidências privadas em out/live-isolated/archive/ai-five-final-pass-*/evidence.json e capturas validated-final-*.
+- Houve uma leitura transitória stale antes dessa repetição, seguida de recuperação. Não foi identificada causa nesse teste; a perda de pacotes retorna a IA local após500ms durante a corrida. Não se declara validação de latência/perda de internet.
+- Testes de memória simulada passaram: setup antes da alocação, nomes longos, revisões/gerações antigas, pose/momento, restauração do bit do cérebro, NaN, modelos diferentes, progresso idempotente, snapshot terminal e importação nos resultados. A validação rejeita nextCP>=n e contadores acima de n antes de qualquer escrita; nome/ponteiro de piloto permanece local.
+
+Limites: modo experimental, corridas comuns com layout compatível; outras modalidades, colocações humanas divergentes entre cópias, colisões entre células e EOS entre PCs continuam sem validação específica. O bit car+15C/0x10 bloqueia Opp::Update, mas produtores locais de comandos continuam existindo e a pose é corrigida pelo hook. Protocolos incompatíveis são recusados (rede3, IA2).

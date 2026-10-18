@@ -45,8 +45,8 @@ constexpr uint64_t kHelloMs = 500;
 constexpr uint64_t kTimeoutMs = 5000;
 
 constexpr uint32_t kMagic = 0x4F43334D;  // "M3CO"
-constexpr uint16_t kProtocol = 2; // terminal won/lost results; all copies must run the same build
-enum Type : uint8_t { kHello = 1, kWelcome, kState, kBye, kDiscover, kOffer, kRoster, kFull, kCar, kRaceStart, kWon, kTraffic, kFinished, kAi };
+constexpr uint16_t kProtocol = 3; // authoritative race setup; all copies must run the same build
+enum Type : uint8_t { kHello = 1, kWelcome, kState, kBye, kDiscover, kOffer, kRoster, kFull, kCar, kRaceStart, kWon, kTraffic, kFinished, kAi, kRaceSetup };
 
 #pragma pack(push, 1)
 struct Header {
@@ -92,6 +92,7 @@ struct WonPacket {  // the sender won the race it shared (again with what 1st pl
     int32_t prize;
 };
 struct FinishedPacket { Header h; mod::race::Finished result; };
+struct SetupPacket { Header h; mod::race::Setup setup; };
 #pragma pack(pop)
 constexpr int kMaxDatagram = 1170;  // also fits the EOS P2P transport
 union Packet {
@@ -393,6 +394,13 @@ void Receive(uint64_t now) {
             case kAi:
                 if (source == 0 && g_cfg.role == Role::Join) mod::ai::Receive(in.raw + sizeof(Header), n - int(sizeof(Header)));
                 break;
+            case kRaceSetup:
+                if (source == 0 && g_cfg.role == Role::Join && n == int(sizeof(SetupPacket))) {
+                    SetupPacket sp;
+                    std::memcpy(&sp, &in, sizeof sp);
+                    mod::race::OnSetup(sp.setup);
+                }
+                break;
             case kTraffic:
                 if (source == 0 && g_cfg.role == Role::Join)
                     mod::traffic::Receive(in.raw + sizeof(Header), n - int(sizeof(Header)));
@@ -413,6 +421,15 @@ void Send(uint64_t now) {
         rp.h.type = kRaceStart;
         rp.start = start;
         Queue(&rp, sizeof rp);
+    }
+    mod::race::Setup setup;
+    if (g_cfg.role == Role::Host && mod::race::TakeSetup(setup)) {
+        SetupPacket sp{};
+        sp.setup = setup;
+        for (int i = 1; i < kMaxPlayers; i++) if (g_players[i].have && g_players[i].welcomed) {
+            sp.h = Make(kRaceSetup, i, now);
+            SendTo(i, &sp, sizeof sp);
+        }
     }
     uint32_t won;
     int32_t prize;

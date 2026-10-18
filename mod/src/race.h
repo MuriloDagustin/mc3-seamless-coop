@@ -25,6 +25,15 @@ struct Finished {
     uint32_t serial;
     uint8_t won, dnf;  // terminal result BEFORE any shared-win override or payment
 };
+struct Setup {
+    uint32_t serial, revision;
+    uint32_t opponent_mask, opponent_limit;
+    int8_t city;
+    uint8_t reserved;
+    int16_t race_idx;
+    // Eight 2C-byte setup opponent records: model index, enabled, inline name and variant; no pointers.
+    uint8_t opponents[8][0x2C];
+};
 #pragma pack(pop)
 
 // Game thread only (the verified xinput hook); includes a human-finish counter read/modify/write.
@@ -36,6 +45,8 @@ bool ChallengeInput();
 void OnStart(const Start& s);
 void OnPartnerWon(uint32_t serial, int32_t prize);  // prize 0: not paid yet
 bool TakeStart(Start& out);       // the host's start to send (once per start)
+bool TakeSetup(Setup& out);
+void OnSetup(const Setup& setup);
 bool TakeWon(uint32_t& serial, int32_t& prize);  // this copy's player won (again with the prize once paid)
 void OnPartnerFinished(const Finished& finished);
 bool TakeFinished(Finished& out); // periodically retransmitted, including losses (no ACK dependency)

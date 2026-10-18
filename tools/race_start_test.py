@@ -3,6 +3,7 @@ city, the hookman filter lifted for the test); the partner's copy must start the
 python tools/race_start_test.py
 """
 import re
+import argparse
 import sys
 import time
 from pathlib import Path
@@ -13,7 +14,12 @@ from race_finish_test import r32  # noqa: E402
 
 
 def main():
-    h, p = Copy(45703, timeout=15), Copy(45704, timeout=15)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host-port", type=int, default=45703)
+    parser.add_argument("--partner-port", type=int, default=45704)
+    parser.add_argument("--no-shots", action="store_true")
+    args = parser.parse_args()
+    h, p = Copy(args.host_port, timeout=15), Copy(args.partner_port, timeout=15)
     data = r32(h, r32(h, 0x557F0C) + 0x0C)
     city = r32(h, r32(h, 0x53F2E0)) & 0xFF
     begin, end = r32(h, data + 0xA5C), r32(h, data + 0xA60)
@@ -35,7 +41,8 @@ def main():
         if "race_state=12" in hs and "race_state=12" in ps:
             break
     time.sleep(20)
-    print(h.shot("start-host"), p.shot("start-partner"))
+    if not args.no_shots:
+        print(h.shot("start-host"), p.shot("start-partner"))
 
 
 if __name__ == "__main__":

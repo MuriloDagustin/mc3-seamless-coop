@@ -38,7 +38,8 @@ python tools\ctl.py <porta> state|shot <nome>|players|peek <addr> [n]
 
 ## Tarefas, em ordem
 
-### 1. IA dos adversários igual nas duas cópias (em andamento)
+### 1. IA dos adversários igual nas duas cópias (critério validado localmente em 18/10)
+- **Atualização Codex:** implementados setup autoritativo e resultados; teste5/5 com chegada passou. Ver TESTE-ISOLADO-2026-10-18.md. Texto abaixo preserva a investigação original. Próximo item: pacote.
 - **Sintoma:** `tools\ai_test.py` mostra `ai=layout_mismatch`. Os pacotes `kAi` chegam (received=5), mas o parceiro recusa.
 - **Causa encontrada:** a máscara de adversários do setup difere. No host, `[[0x53F2E0]+0x3D4] = FFFFFF1F` (5 adversários, `race+0x18 = 5`); no parceiro, `FFFFFF0F` (4). Os nomes também diferem (vêm do pool de nomes, `0x1D15B0`), e o hash de layout em `ai.cpp` inclui o nome (`progress+0x5C`).
 - **O que fazer:**
