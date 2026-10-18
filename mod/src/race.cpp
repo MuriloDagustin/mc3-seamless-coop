@@ -26,6 +26,13 @@ constexpr uint32_t kEntry = 0x98, kEntrySize = 0xB8;  // racer i at race + 0x98 
 bool Ptr(uint32_t va) { return va >= 0x10000 && Mapped(va, 4); }
 uint32_t P(uint32_t va) { return Ptr(va) ? R32(va) : 0; }
 
+// a race is challenged with the headlights on: the marker test needs the local car's light flag (model +0x132, what
+// the light button toggles through 0xF6BD0)
+void Headlights() {
+    uint32_t model = P(P(P(P(0x558814) + 8) + 0x14) + 0x0C);
+    if (Ptr(model + 0x132)) G<uint8_t>(model + 0x132) = 1;
+}
+
 std::mutex g_lock;
 // host
 uint32_t g_serial = 0, g_sent_id = 0;
@@ -35,11 +42,13 @@ Start g_start_out{};
 bool g_have_start = false, g_start_done = false;
 Start g_start_in{};
 uint32_t g_done_serial = 0;
-int g_phase = 0;  // 0 idle, 1 record ready and car placed, waiting for the trigger
+int g_phase = 0;  // 0 idle, 1 car outside the marker (it arms), 2 in it with the lights on, waiting for the trigger
+float g_target[3] = {};
 uint32_t g_record_id = 0;
 uint8_t g_saved_hookman = 0xFF, g_saved_side = 0xFF;
 uint64_t g_phase_at = 0;
 // both
+uint64_t g_lights_until = 0;  // the test's challenge: the lights kept on until then
 bool g_partner_won = false, g_out_won = false, g_won_sent = false, g_partner_gone = false, g_forfeited = false;
 uint32_t g_won_serial = 0, g_race_serial = 0;
 // the prize: the winner sends what it was paid (1st place), a copy credited with the partner's win tops its own up
@@ -126,10 +135,19 @@ uint32_t EnsureRecord(uint32_t data, const Start& s) {
 void PartnerTick(uint64_t now) {
     uint32_t career = P(kCareer), data = P(career + 0x0C);
     if (!data) return;
-    if (g_phase == 1) {  // waiting for this copy's own trigger
+    if (g_phase == 1 && now - g_phase_at > 300) {  // armed outside: into the marker
+        car::Pose at;
+        if (car::Local(at)) {
+            for (int i = 0; i < 3; i++) at.m[3][i] = g_target[i];
+            car::Place(at);
+        }
+        g_phase = 2;
+    }
+    if (g_phase >= 1) {  // waiting for this copy's own trigger
+        Headlights();
         uint32_t rec = FindRecord(data, int(g_record_id), 0, 0);
         bool started = P(career + 0x2C) == 4 && G<uint16_t>(career + 0x34) == g_record_id;
-        if (started || now - g_phase_at > 6000) {
+        if (started || now - g_phase_at > 10000) {
             if (rec) G<uint8_t>(rec + 0x09) = g_saved_hookman, G<uint8_t>(rec + 0x0A) = g_saved_side;  // as it was
             g_phase = 0;
             g_start_done = true;
@@ -165,8 +183,10 @@ void PartnerTick(uint64_t now) {
     }
     car::Pose at;
     if (!car::Local(at)) return;
-    at.m[3][0] = RF(desc + 0x14), at.m[3][1] = RF(desc + 0x18) + 0.5f, at.m[3][2] = RF(desc + 0x1C);
+    g_target[0] = RF(desc + 0x14), g_target[1] = RF(desc + 0x18) + 0.5f, g_target[2] = RF(desc + 0x1C);
+    at.m[3][0] = g_target[0] + 60.0f, at.m[3][1] = g_target[1], at.m[3][2] = g_target[2];  // outside first: it arms
     car::Place(at);
+    G<uint8_t>(cruise + 0x1250) = 0;
     g_phase = 1;
     g_phase_at = now;
     Log("race: taken to the start of %s", s.name);
@@ -234,6 +254,7 @@ void Tick(bool hosting, bool connected) {
         g_have_start = false, g_phase = 0, g_partner_won = false, g_partner_gone = false;
         return;
     }
+    if (now < g_lights_until) Headlights();
     if (hosting) HostTick();
     else PartnerTick(now);
     if (Cruise()) g_partner_won = false, g_partner_gone = false, g_partner_prize = 0;
@@ -294,12 +315,13 @@ std::string GoToOpenRace(int index) {
         uint32_t desc = P(P(kRaceDb) + uint32_t(city) * 0x50 + 0x20) + uint32_t(idx) * 0x30;
         car::Pose at;
         if (!Ptr(desc + 0x1C) || !car::Local(at)) return "error no start position";
-        // from outside the marker (it arms), then into it on the next ticks
-        at.m[3][0] = RF(desc + 0x14) + 30.0f, at.m[3][1] = RF(desc + 0x18) + 0.5f, at.m[3][2] = RF(desc + 0x1C);
+        // from outside the marker (35 m around: it arms), then into it, the lights on for a while
+        at.m[3][0] = RF(desc + 0x14) + 60.0f, at.m[3][1] = RF(desc + 0x18) + 0.5f, at.m[3][2] = RF(desc + 0x1C);
         car::Place(at);
-        Sleep(300);
-        at.m[3][0] -= 30.0f;
+        Sleep(400);
+        at.m[3][0] -= 60.0f;
         car::Place(at);
+        g_lights_until = GetTickCount64() + 6000;
         return "ok going to " + std::string(RaceName(city, idx)) + "\n" + list;
     }
     return list.empty() ? "no open races" : list;
