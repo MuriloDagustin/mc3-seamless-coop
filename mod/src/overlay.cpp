@@ -3,6 +3,7 @@
 #include "overlay.h"
 
 #include "mod.h"
+#include "ui.h"
 
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -154,6 +155,7 @@ void SwapchainMade(IDXGISwapChain* swapchain, IUnknown* queue) {
 void BeforePresent(IDXGISwapChain* swapchain) {
     std::lock_guard lock(g_lock);
     if (!g_swapchain) return;
+    ui::Render(g_swapchain, g_queue, g_device);  // the panel first: captures show it
     bool want;
     std::wstring path;
     {

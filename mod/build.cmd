@@ -14,7 +14,10 @@ set "EOS=C:\dev\eos-sdk\SDK"
 set "EOSFLAGS="
 if exist "%EOS%\Include\eos_sdk.h" set "EOSFLAGS=-DMC3_WITH_EOS=1 -I%EOS%\Include %EOS%\Lib\EOSSDK-Win64-Shipping.lib"
 clang-cl /nologo /O2 /std:c++20 /EHsc /MT /LD /W3 /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE ^
-  /Ithird_party /Isrc /Isrc\shim src\*.cpp src\net\*.cpp /Fo"%OUT%\\" /Fe"%OUT%\xinput1_4.dll" %EOSFLAGS% ^
-  /link /DEF:xinput1_4.def ws2_32.lib ole32.lib user32.lib gdi32.lib advapi32.lib d3d12.lib dxgi.lib || exit /b 1
+  /Ithird_party /Ithird_party\imgui /Isrc /Isrc\shim src\*.cpp src\net\*.cpp ^
+  third_party\imgui\imgui.cpp third_party\imgui\imgui_draw.cpp third_party\imgui\imgui_tables.cpp ^
+  third_party\imgui\imgui_widgets.cpp third_party\imgui\backends\imgui_impl_dx12.cpp ^
+  third_party\imgui\backends\imgui_impl_win32.cpp /Fo"%OUT%\\" /Fe"%OUT%\xinput1_4.dll" %EOSFLAGS% ^
+  /link /DEF:xinput1_4.def ws2_32.lib ole32.lib user32.lib gdi32.lib advapi32.lib d3d12.lib dxgi.lib d3dcompiler.lib dwmapi.lib || exit /b 1
 if exist "%EOS%\Bin\EOSSDK-Win64-Shipping.dll" copy /y "%EOS%\Bin\EOSSDK-Win64-Shipping.dll" "%OUT%\" >nul
 echo built %OUT%\xinput1_4.dll
