@@ -1,0 +1,161 @@
+==================== disconnect
+ANSWER: The in-race check is 0x1C15F0. It runs every frame from 0x1C1FC0, which the game update 0x1EDB0/0x1F400 calls. It walks the slots i = 0 .. setup+0x4C-1 of the CURRENT setup [0x53F2E0]. For each slot it reads port = GetPadPort(i) = 0x269450, which returns slot+0x10 ([setup+0x124+i*0x2C]). If [[0x557ED0]+4] == 6 it uses port = [0x53F2DC] instead.
+
+- **What it skips:** the only skip is `port < 0`. It does not look at +0x108 (network game), +0x3D8, slot+0x18, slot+0x26, +0x50 or the player manager.
+- **How a port gets "required":** any slot below the +0x4C count whose +0x10 is 0..3. There is no other list.
+- **The latch:** if pad[port].state ([0x4AFD90+port*0x38+0x1C]) is not 4, a per-port counter byte 0x533E30[port] counts up. When it reaches 0x0F (about 15 frames) it sets byte 0x533E2C[port] = 1. Both bytes go back to 0 only when that same port reads state 4 while some slot still maps to it.
+- **What fires the message:** with the latch set and ([0x557ED0]+4 == 6 or race state [0x557EEC]+4 >= 4), it calls 0x156090(i, 0) on [0x50F148]. That sets +0x222 = 1 (paused) and +0x224 = i (who paused) on the object [[0x50F148]+0x0C]+0x0C. The HUD (0xB2830 / 0xB07D0) sees +0x222 go from 0 to 1, reads GetSlot(+0x224)->+0x10 and calls 0xC8010(port). That function builds the text key "Controller_%d_Disconnect" from the port, so port 3 shows as "port 4".
+
+**Why setting the pad to -1 afterwards did not clear it:**
+- The pause flag +0x222 is stored in that race object, not in the slot.
+- Only two places clear it. The HUD does it at 0xB2C44..0xB2C8B (or 0xB0852..0xB088F) on a fresh START press on the pad of SLOT 0, GetPadPort(0); the hide function 0xC61D0 then runs on the 1-to-0 change. Unpause 0x161C30 also clears it.
+- While +0x222 is set, the normal START/pause handler 0x1C1830 does nothing (0x1C188A).
+- The latch bytes 0x533E2C[3] / 0x533E30[3] also stay set, because no slot maps to port 3 any more.
+
+**To recover from the stuck state:**
+1. Set slot1 +0x10 = -1 in both setups.
+2. Write 0 to bytes 0x533E2F and 0x533E33, which are 0x533E2C[3] and 0x533E30[3].
+3. Press START on player 1's pad, or call 0x161C30 with ecx = [[0x50F148]+0x0C]+0x0C. That this function is a full unpause is a guess. Writing +0x222 = 0 alone also makes the HUD hide the message, but the game-state pause may stay on.
+
+**Fields for a second, non-local human slot.** These copy what the game's own network setup builder writes for remote humans (0x2685B..0x268AB):
+- +0x10 = -1. This is the one field the check needs. Slot ctor 0x2766C0 sets it to 0, which would point at player 1's pad (port 0), so it must be written explicitly.
+- +0x14 = -1 and +0x18 = -1, as remote players have.
+- +0x0C = CarCfg.
+- +0x26 = 0.
+- setup+0x50 = 1 in both current and next setups.
+
+Keep +0x50 = 1. If it is above 1, the race-start step 0x1C3040 waits for a START press on each local pad and then writes a real port into slots below +0x50 through 0x2694F0.
+
+Set these fields in both [0x53F2E0] and [0x53F2E4] before setup+0x4C becomes 2. Otherwise the check can run while +0x10 still holds 0 or 3, and port 3 only needs about 15 frames of being disconnected to latch. With +0x10 = -1 the check, the START handler 0x1C1830, the controller assignment 0x1C27AF and mcPlayerInput::Update all skip the slot.
+VERIFY answer_ok: False | fix: The core answer is correct and verified in the asm. The check is 0x1C15F0. It loops over cur+0x4C slots, gets each port with GetPadPort (slot+0x10), skips only port < 0, and uses the latch bytes 0x533E2C/0x533E30 indexed by port. It fires through 0x156090 and the HUD 0xB2830/0xB07D0 -> 0xC8010. Setting slot +0x10=-1 in both setups before +0x4C becomes 2 is the right fix, provided [[0x557ED0]+4] != 6.
+
+Corrections:
+1. Clearing +0x222 is not limited to the HUD START path and 0x161C30. 0x16B840 (0x16B84C) and 0x264100 (0x26410B) also clear it unconditionally on the same object, and init/reset code clears it at 0x162632, 0x1628DB and 0x164599.
+2. mcPlayerInput::Update (0x2C9AA0) does not use slot+0x10. It reads its port from the table at 0x5576E8 + idx*0xC. idx comes from slot+0x18 (through input+0x64, built in the ctor at 0x2C99DF), and the table is filled by 0x2C8A30 -> 0x2CAA80. Update skips the pad because slot+0x18 == -1 makes input+0x64 = 0. So the recommended +0x18 = -1 is what actually stops local pad input. Also, the input ctor's port argument (player+0xEC) must be -1 for such a slot. Otherwise 0x2C8A30 calls 0x2CAA80(-1, ...) and writes out of bounds (0x5576DC/E0, plus a 0x140-byte copy to 0x558708).
+3. 0x1C2780/0x1C27AF does not skip -1. It is avoided only because +0x50 == 1.
+4. 0x156090 writes +0x224 = arg1 only in its main branch. Other branches write 0 or nothing, and some return without pausing.
+5. The recovery steps hold. Clearing the latch bytes 0x533E2F/0x533E33 and pressing START on slot 0's pad, or calling 0x161C30, clears the pause. Pressing START works because ebx == 0 at 0xB2C44.
+  VERIFY wrong : Only the HUD (START edge on GetPadPort(0)) and unpause 0x161C30 clear +0x222; while +0x222 is set, START handler 0x1C183 -> Besides the HUD START path and 0x161C30, +0x222 on the same object is also cleared by 0x16B840 (0x16B84C), 0x264100 (0x26410B) and the init/reset writers 0x162632, 0x1628DB and 0x164599.
+  VERIFY wrong : Per-slot pad readers skip port -1: 0x1C18EB, 0x1C1E03, 0x2C0C83, 0x2C15C0, and mcPlayerInput::Update 0x2C9AE0/0x2C9B22 -> mcPlayerInput::Update reads its port from table 0x5576E8[(local idx)*0xC], where the index comes from slot+0x18 via input+0x64. It skips the pad when slot+0x18==-1 at ctor time (input+0x64=0) or input+0x0A==-1. Slot+0x10 plays no part. For a remote slot, +0x18=-1 is required, and the input ctor port
+OPEN: ['Does Unpause 0x161C30 fully undo the pause from 0x156090 when the game pauses itself (resuming [0x557ED0] through vtable+4 with 2 or 4, and calling 0x161230)? Which branch of 0x156090 runs in a career race depends on [obj+0xD8]/[obj+0xE0] (screen ids, e.g. 0x15). Not traced live.', 'The meaning of [[0x557ED0]+4] == 6 in the cmovz at 0x1C1624 (possibly attract/demo mode) is unconfirmed.', "RE-MAPA says slot+0x18 = -1 means unused, but the network builder also writes -1 into +0x18 for remote humans and 0 for the local player. +0x18 is probably the local player/viewport index, so 'unused' is likely wrong. Verify which code uses +0x18 before relying on it to exclude AI.", "With +0x108 = 0 (career), does anything besides 0x2C9570 / the network sync feed slot 1's mcPlayerInput? With pad -1, Update 0x2C9AA0 skips the pad read (cmp edi,-1 jz 0x2C9BD4). The injection point for network control data in a non-network race still has to be chosen.", 'Check whether [0x53F2E8]+0x4C is ever copied from the co-op setup. If it became 2, the frontend checker 0x159440 would require two connected pads on menu screens 0x19-0x1B.']
+==================== remote-input
+ANSWER: SHORT ANSWER
+mcPlayerInput does not have one flag that picks pad vs. network. The choice comes from three gates.
+(1) Is an input object created at all? 0x2CB320 creates it only if the slot's pad port is not -1 OR the race is a network game.
+(2) Does the object have a local pad? Update 0x2C9AA0 takes the pad path only if input+0x08 != -1, input+0x0A (pad port) != -1 and input+0x64 (pad mapper) is not NULL.
+(3) 0x2C9570 runs at the end of every Update path and only does anything when setup+0x108 != 0.
+  - If 0x2694B0() (setup+0x3D8, the local network slot) == input+0x60 (the player slot), this is the LOCAL player. Its own controls are packed into input+0x6C..+0x77 and +0x78 is set to 1. The packed bytes are then decoded and applied back to its own car.
+  - Otherwise this is a REMOTE player. If input+0x78 == 0 nothing happens. If it is non-zero, the packet is decoded and written into the car.
+In a network game the pad path also skips its own write to the car (0x2CA4B2 calls 0x2694A0 and jumps to 0x2CA60C), so even the local car is driven through the quantized packet.
+Session [0x557EFC] is not read by Update or 0x2C9570. It is used only on the send side (0x2C188C: session+0x10 >= 0 and session+0x24 != 5, then vtable+0xD4) and in remote correction (0x2C055A: vtable+0x18).
+
+RECEIVE PATH
+- Dispatcher 0x1AF470 switches on msg[0]-0x40 through jump table 0x1AF6F4 and calls the session object's vtable. vtable 0x449100: +0x170 / +0x184 / +0x188; base vtable 0x466518 at 0x1AF1E2.
+  - msg 0x40 goes to 0x24C70: input only.
+  - msg 0x41 goes to 0x24CC0: state only.
+  - msg 0x42 goes to 0x26D00: input and state. Message size 0x40; ctor 0x1AD170; layout: +0x08 = 12-byte input, +0x14 = 0x2C-byte state.
+- Each handler is called as (msg, senderSlot) and ignores senderSlot == 0x2694B0().
+- The handler finds the input as players[slot] -> +0x14 (vehicle holder) -> +0x04 (mcPlayerInput) and calls 0x2C9810(msg+8).
+- 0x2C9810 copies 3 dwords into input+0x6C/+0x70/+0x74 and sets byte input+0x78 = 1.
+- The remote side never clears +0x78. The last packet stays latched and is re-applied every frame. Only the sender clears it after a send (0x2C9830).
+
+PACKET LAYOUT (12 bytes at input+0x6C)
+- +0x6C dword flags: the low 24 bits are copied to input+0x28 (the button bits).
+  - 0x100 = upshift: transmission 0xADAC0 on [car+0x14].
+  - 0x200 = downshift: 0xADAF0.
+  - 0x02 calls 0xF6BD0 on holder+0x0C. 0x40 calls 0x10B2C0 on holder+0x10. 0x04 calls 0x1113F0 on car+0x184. 0x08 calls 0x128E50 on car+0x180.
+  - 0x10 together with the high byte +0x6F: the receiver sets [holder+0x44]+0x3C = byte-1, then clears bit 0x10 and the high byte, so this one is one-shot. Bit 0x20 is its argument (0x101A10).
+  - 0x8000 and 0x10000..0x100000 feed car+0x18C (0x2C8C40).
+- +0x70 u8 throttle = (int)(throttle*255); decoded *1/255.
+- +0x71 u8 brake, same scaling.
+- +0x72 u8 handbrake, same scaling.
+- +0x73 s8 steer = (int)(steer*127); decoded *1/127. Truncated, not rounded.
+- +0x74 u8 gear = input+0x2C (current gear read from [[car+0x14]+0x14]). The receiver only stores it back in input+0x2C; it does not set the car's gear. Gear changes on a remote car happen only through flags 0x100/0x200.
+- +0x75 and +0x76: s8 copies of input+0x20 and +0x24 (two extra axes) *127.
+- +0x77 s8 = input+0x54 (transmission/assist mode bits, passed to 0x1210F0 on the car).
+- After decoding, 0x2C9570 writes the car (car = input+0x34 = holder+0x08): car+0x6C steer, +0x70 throttle, +0x74 brake, +0x78 handbrake, +0x7C = input+0x1C. +0x1C is not in the packet. It then calls 0x2C8C40.
+
+HOW AN EXTERNAL WRITER CAN DRIVE A REMOTE CAR
+- With setup+0x108 = 1, the partner slot not equal to +0x3D8 and its pad port = -1: each frame, before the input objects update, write the 12 packet bytes to input+0x6C and set byte input+0x78 = 1. This is exactly what 0x2C9810 does.
+- Use 0x100/0x200 for one frame only, because the latched packet is re-applied every frame.
+
+THE CATCH IN CAREER MODE (+0x108 = 0)
+- 0x2C9570 returns at once, so the network path is never used.
+- 0x2CB320 creates no mcPlayerInput at all for a slot with pad port -1 (holder+0x04 = 0).
+- So offline you can either:
+  - write the car control floats yourself every frame (car = [[players[i]]+0x14]+0x08: +0x6C steer -1..1, +0x70 throttle, +0x74 brake, +0x78 handbrake; shift through 0xADAC0/0xADAF0 on [car+0x14]); or
+  - (recommended) patch the recompiled code at the three 0x2694A0 call sites (0x2CB334, 0x2C9573, 0x2CA5E0) to report "network" only for the partner slot. The partner input then takes the remote branch at 0x2C9648 while the career stays offline.
+- Do not set +0x108 globally. It reroutes many things: 0x2C1520 replaces the whole player update of non-local slots with 0x2C0540, the create mask uses the session's player mask, and 0x2C0540 dereferences [0x557EFC].
+
+POSITION/VELOCITY CORRECTION: YES, in network mode
+- The sender (0x2C182D..0x2C18AD, inside player update 0x2C1520) packs the car matrix and velocity into player+0x90..+0xB8. It sends msg 0x42 through session vtable+0xD4 (0x1AE3F0). That function is rate-limited by [0x4B283C] (0x42 = 66 units of the session's time counter at session+0x1C, probably ms) and sends to every player except the local one.
+- The receiver: 0x26D00 extrapolates position += velocity * ping*0.001*0.5. Then 0x2BF2B0 copies the 0x2C bytes to player+0x90 and sets player+0xBC = 1.
+- Each frame, for each non-local player in a network game, 0x2C1520 calls 0x2C0540 instead of the normal update. 0x2C0540 compares the latest received state with the car and then snaps or blends depending on thresholds in per-connection parameters (session vtable+0x18 (slot) -> +0x60: +0x3C/+0x3D enable, +0x40/+0x44 thresholds, +0x48..+0x50 coefficients). It writes the matrix with 0x2A35A0 ([car+0x68] -> [+0x04]+0x10) and the velocity with 0x3432B0 ([[car+0x68]+0x10] +0x44..+0x4C, and momentum = velocity * mass at +0x2C).
+- player+0xBC is never cleared inside 0x2C0540, so it keeps correcting against the last received state.
+- An offline co-op has to do its own correction, because 0x2C0540 needs [0x557EFC]. Two ways: write the inst matrix plus body velocity as the game does, or use car+0x80/+0x8C plus Reset.
+
+WHY "CONTROLLER DISCONNECTED" APPEARED
+- 0x1C15F0 loops i < count (+0x4C) and reads port = slot+0x10 (0x269450). If the port is >= 0 and pad[port]+0x1C != 4 (0x4AFD90 + port*0x38), it counts frames in [0x533E30+port]. At 15 it sets [0x533E2C+port] = 1 and opens the dialog through 0x156090 on [0x50F148].
+- Negative ports are skipped. That is why changing the pad to -1 afterwards did not clear it: the flag and the dialog were already up.
+- Set slot+0x10 = -1 (and +0x18 = -1) BEFORE raising +0x4C.
+VERIFY answer_ok: True | fix: The answer is largely correct; every CONFIRMED finding I re-checked matches the asm and the XBE data (jump table, vtable 0x449100, constants 255 / 127 / 1/255 / 1/127, rate limit 0x42). Corrections and nuances:
+(1) 0x2C9570 does not run on every Update path. The pad path exits at 0x2C9BDF -> 0x2CA613 without calling it when byte [[0x557ED0]+9] != 0, and Update returns at once when input+0x08 == -1.
+(2) The 0x26D00 latency extrapolation is conditional on the connection flag [session+0x44]. That flag is updated only when the sender == session+0x18 (host), from a state word. The factor is two constants: 0.001 at 0x44935C times [0x447C18]. The 0.5 value of 0x447C18 was not read.
+(3) The pad path writes car+0x7C from [edi]; on one path edi = input+0x1C, on the other it was set earlier in Update and was not traced. This is not always [esi+0x1C].
+(4) 0x1C15F0, the controller-disconnected detector:
+  - When [[0x557ED0]+4] == 6, every slot's port is replaced by [0x53F2DC] (cmovz), so a -1 slot port is not skipped in that state.
+  - The flag and counter at 0x533E2C/0x533E30 clear only when pad[port]+0x1C == 4 again.
+  - The dialog opens only when [[0x557ED0]+4] == 6 or [[0x557EEC]+4] >= 4.
+  - The flag is set once the counter has reached 15.
+(5) 0x24C70 does not null-check the input pointer before calling 0x2C9810.
+(6) In 0x2C1520, "remote" means slot pad port == -1 (0x269470), not slot != +0x3D8. The answer's evidence says this; its prose says "non-local".
+  VERIFY wrong : Answer claim: 0x2C9570 runs at the end of every Update path -> 0x2C9570 runs at the end of the no-pad path and of the pad path, except when the pad path exits early because [[0x557ED0]+9] != 0, or when input+0x08 == -1.
+  VERIFY unclear : Recommendation: patch the 0x2694A0 checks at 0x2CB334, 0x2C9573 and 0x2CA5E0 so they return 'network' for the partner sl -> 
+OPEN: ['Does any code besides mcPlayerInput (vehicle update 0xFFD90, AI driver, replay) write car+0x6C..+0x7C when holder+0x04 is NULL? This decides whether the direct-write offline approach is stable.', 'What is input+0x1C (analog channel 1, smoothed, written to car+0x7C)? It is not in the packet, so a remote car keeps a stale value.', 'Exact meaning of transmission bits in input+0x54 / packet +0x77 (0x1210F0: bit 2 -> 0xADCD0, bit 1 -> 0xADD70, bit 4 ...), and what the holder+0x0C/+0x10/+0x44 and car+0x180/+0x184/+0x18C actions are (horn, lights, nitrous, special move?).', 'Is 0x2CA960(n) a pressed-this-frame (edge) test? This decides how long 0x100/0x200 should be held in an injected packet.', 'Does player+0x54 -> +0x58 == input+0x60 at 0x2CA5F4 (the camera/viewed-player test) make the no-pad network path call 0x2CAAD0 with a NULL mapper? Is that reachable for a remote slot?', 'The 0x2C0540 snap/blend thresholds (+0x40/+0x44) and coefficients (+0x48..+0x50) live in the per-connection object (session vt+0x18 -> +0x60); their default values were not read.', 'Patching the 0x2694A0 checks only for the partner slot (0x2CB334, 0x2C9573, 0x2CA5E0) was not tested. Also not checked: other +0x108 consumers in race progress/HUD for the partner slot, and whether the offline create-mask 0x2BD810 creates slot 1 at all when +0x108=0.']
+==================== network-flag
+ANSWER: Conclusion: a "pseudo network" career race (setup+0x108=1, +0x3D8 = local slot, 2 humans, no real session) does not work. Turning the flag on breaks partner-car creation, AI opponents, traffic, race finish and autosave. Faking the session object as well does not fix the AI and autosave problems. Build the partner as a non-network human slot instead (setup+0x108 = 0) and drive its car yourself.
+
+Why the network flag fails. All items below were seen in the asm unless marked otherwise.
+(1) Partner car is never created. The player create mask 0x2BD810 only applies the session check when +0x108 is set. In that case, if [[0x557EFC]+0x10] < 0, only slot == +0x3D8 gets a player. The session object always exists, and its ctor 0x5CD20 sets +0x10 = -1, +0x18 = -1, +0x14 = 0.
+(2) No AI opponents. 0x1D2F60 sets race+0x18 (the opponent count used by OppMgr::Init 0x1E43C0) to 0 when the flag is set. Without the flag it is min(setup+0x40, 4).
+(3) No traffic. The traffic update 0x6CC90 exits at 0x6CCA9 when the flag is set and session+0x10 < 0.
+(4) The race never finishes, so no money and no ReportRaceResult. The checkpoint and finish code (0x1C6CA0, 0x1C6E0C) sends the finish to session vt+0xE8 = 0x1AE900 instead of handling it locally (0x1C6740). 0x1AE900 drops the message when the slot != session+0x10 (-1), so race state 7 (0x1C2B00 -> money 0x1CFC50, then 0x1D1810 -> ReportRaceResult 0x277EE0) is never reached.
+(5) No autosave. Race state 10 (0x1C3580) goes to state 12 when the flag is set and to state 11 (autosave 0x1C33E0) otherwise.
+(6) Career-only features are skipped. The career race "mediator" (0x1CD7EC, stored in mcPgCareer+0x1C and used by ReportRaceResult via 0x28FCF0), the career car special-ability flags (0x1240F0 at 0x2C00BA), the career cruise in-world menu (0x2C0D24) and the race intro (state 3 jumps straight to 4 at 0x1C2350) are all skipped.
+(7) Other changes. Pause moves to the local-pad-only network handler 0x1C1DC0, which queues mcGameState 3 instead of 1. The race timer uses wall-clock time (0x1C3626).
+Faking a host session (session +0x10 = +0x18 = 0, mask 3) would fix (1) and (4), but (2), (3) and (5) stay broken, and it switches on host-session code throughout.
+
+How to build the partner slot instead. Set these fields in BOTH [0x53F2E0] and [0x53F2E4] before the race loads. 0x20260 compares +0x4C and +0x108 between the two copies and reloads the world if they differ.
+- Setup: +0x108 = 0. +0x4C = 2. +0x50 = 1 (0x1C33F7 skips the autosave if +0x50 > 1).
+- Partner slot (setup+0x140):
+  - +0x0C = its own CarCfg (copy it with 0x272010).
+  - +0x26 = 0. If it is set, the player ctor skips creating the car (0x2BFFCF).
+  - +0x18 = -1. The input then gets no controller mapping (input+0x64 = 0), so it never reads a pad. The player gets no camera (+0x54) and no +0x78 object, and rumble setup 0x2CB710 is skipped. This matches network remote slots.
+  - +0x10 (pad) must NOT be -1 while the car is built. 0x2CB32B creates the car's mcPlayerInput only if pad != -1 or the flag is set; otherwise car+0x04 = 0 and the car can never be driven. Right after the players are created (0x2BE100 returns), set slot+0x10 = -1 and input+0x0A = -1. Alternatively, patch 0x2CB32B to always create the input for this slot. While the pad is valid, the disconnect check 0x1C15F0 will fire (see below), and the pause check 0x1C1830 and career menu 0x2C0C60 also read slot+0x10. All three skip a slot whose pad is < 0.
+  - +0x14 (HUD number) = -1 (GUESS). The countdown and finish-message loops skip slots with -1.
+- Why your test showed "Controller disconnected": the check is not tied to the network flag. 0x1C15F0 counts frames where pad struct (0x4AFD90 + pad*0x38) +0x1C != 4 in [0x533E30 + pad]. After 15 frames it sets [0x533E2C + pad] = 1 and opens the menu with 0x156090. Setting pad = -1 afterwards does not clear that byte or close the open menu.
+- Driving the car: with no network flag and input+0x64 = 0, Update 0x2C9AA0 goes 0x2CA5E0 -> 0x2C9570, which returns at once, so the car gets no controls. Each frame, around the partner input's Update only: set [0x53F2E0]+0x108 = 1 with +0x3D8 = 0, write the partner packet into input+0x6C..+0x77 and set input+0x78 = 1, call Update, then set +0x108 back to 0. The remote branch 0x2C9648..0x2C9808 unpacks the packet and applies it to the car. This only works if nothing else runs between those writes (GUESS: the game is single-threaded). Or write input +0x0C..+0x28 and +0x54 yourself and copy what that branch does.
+
+What then works for career, using the existing non-network 2-human path:
+- Money and credit: 0x1CFC50 and 0x1D1810/ReportRaceResult use GetLocalPlayerIndex, which returns 0 without the flag, so they use the host's own progress entry.
+- Autosave runs (state 10 -> 11).
+- AI opponents and traffic run normally. The mediator is created.
+- Pause: the host can pause, and that freezes the partner's car too.
+- Watch the finish rule: race state 7 is only requested when race+0x1250 (humans finished) == +0x4C (0x1E07BF, 0x1E0BFE). The partner's car must cross the line in the host's world, or you must call the finish handler 0x1E06E0 for slot 1 (GUESS). Otherwise the host stays in state 6. The partner also counts in the host's finishing position.
+VERIFY answer_ok: False | fix: The analysis of what the network flag does holds. Everything I re-checked matched the asm, and the conclusion stands: a pseudo-network career race breaks partner-car creation, AI, traffic, finish/money/ReportRaceResult and autosave, so the partner must be a non-network human slot.
+
+The recommended slot configuration is unsafe. The answer says to keep slot+0x10 (pad) valid during the car build while slot+0x18 = -1, then set pad = -1 after 0x2BE100. That combination corrupts memory, CONFIRMED in the asm:
+- mcPlayerInput ctor 0x2C9970 calls 0x2C8A30(pad) at 0x2C9A44.
+- With pad != -1, 0x2C8A30 calls 0x2CAA80([slot+0x18], 2, pad) at 0x2C8A62.
+- With id -1, 0x2CAA80 writes 0x5576DC/0x5576E0 and copies 0x140 bytes from 0x53F1C8 over 0x558708..0x558847.
+- That overwrites 0x5587E0 (read at 0x2BE205), 0x558814 (player manager) and 0x558838 (used by money 0x1CFC50 and 0x1CFA60).
+
+Correct recipe: give the partner slot pad = -1 and +0x18 = -1 from the start, in both [0x53F2E0] and [0x53F2E4]. Patch 0x2CB32B so the descriptor for the partner slot ([esi+0xE8] == 1) still creates the mcPlayerInput. With pad = -1, 0x2C8A30 only stores +0x0A = -1. No post-creation pad rewrite is needed, and the disconnect check 0x1C15F0, pause 0x1C1830 and cruise menu 0x2C0C60 never see a pad for that slot.
+
+Two smaller corrections:
+- 0x1C15F0 substitutes [0x53F2DC] for every slot's pad when mcGameState == 6 (cmovz at 0x1C1624), so "pad < 0 is skipped" is not true in that state.
+- With +0x4C = 2, state 10 also skips 0x1CFA60, vt+0xD8 and 0x1D08F0. Their effect on career (records/ghost data?) is unverified.
+
+The rest of the driving trick holds as described: toggle +0x108 around the partner input's Update, write input+0x6C..+0x77, set +0x78 = 1, and enter the remote unpack 0x2C9648..0x2C9808 because +0x3D8 = 0 != input+0x60 = 1. The host's player 0 camera (+0x54) must exist, because 0x2CA5F4 dereferences it while the flag is set.
+  VERIFY wrong : Recommended partner config: +0x18 = -1 while +0x10 (pad) is valid during the car build, then set pad = -1 afterwards -> Keep the partner pad = -1 AND +0x18 = -1 from the start, and patch 0x2CB32B so the input is created for that slot (e.g. also accept [esi+0xE8] == partner slot). An unconditional jmp may also give inputs to other descriptors (GUESS). 0x2C8A30(-1) then just stores +0x0A = -1, and the disconnect check,
+OPEN: ['Who opens and closes the disconnect menu, and how does 0x156090 close it? Does clearing [0x533E2C+pad]/[0x533E30+pad] dismiss an already-open menu, or must the menu (0x50F148, menu +0x223/+0x224) be closed explicitly?', 'Is slot+0x10 read again after player creation (for example by 0x2C9A52 for the local player, the HUD, or 0x2C0C60)? This decides whether setting the pad to -1 right after 0x2BE100 is safe, or whether patching 0x2CB32B is better.', "Toggling setup+0x108 only around the partner's input Update assumes nothing else reads the flag during that call (0x2CA5E0 calls 0x2BF570(0) and reads player0+0x54+0x58). Check this live; otherwise write input +0x0C..+0x28/+0x54 and copy the apply block 0x2C96E5..0x2C9808.", 'How should slot+0x14 (HUD number) be set for the partner: -1, or 1 like split-screen? Is player+0x58 (HUD) created for a slot with no camera?', 'What fallback should be used when the partner disconnects mid-race? Calling 0x1E06E0(1) (race finished handler) should raise race+0x1250 to 2, but its side effects (HUD message via player+0x58+0x50 for slot 1) are unverified.', 'Do career races with 2 humans place the partner on grid slot 1 without stealing an AI grid position (opponent descriptors race+0x2C, race+0x65C array sized humans+race+0x18)?', 'What do mcGameState values 1 and 3 mean exactly (pause freeze vs in-race menu while running)? 3 also blocks money and ReportRaceResult if the race ends while it is active.']

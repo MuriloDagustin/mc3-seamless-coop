@@ -29,8 +29,12 @@ def main():
     for _ in range(7):  # movies, legal page, attract: A and Start skip them
         press(c, "start", 2.5)
     print(c.shot("race-menu"))
-    press(c, "a", 3)    # Career
-    press(c, "a", 38)   # Start Career: loads the city and the first race
+    time.sleep(8)  # the main menu takes no input while its camera flies in
+    # Career, then Start Career; the main menu sometimes misses the first press, and a third one while the race
+    # loads does nothing
+    press(c, "a", 3)
+    press(c, "a", 3)
+    press(c, "a", 38)
     press(c, "b", 4)    # skip the race intro
     print(c.shot("race-start"))
 

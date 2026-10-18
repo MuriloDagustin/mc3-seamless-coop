@@ -8,6 +8,8 @@
 
 namespace mod::car {
 
+constexpr uint32_t kCarCfgBytes = 0x108;  // the game's CarCfg: model, parts, paint, vinyls, upgrades, tuning
+
 // a car's place and motion, world space; the matrix rows as the game stores them, then the position
 #pragma pack(push, 1)
 struct Pose {
@@ -22,9 +24,14 @@ int City();                // the loaded city, -1 none
 bool Local(Pose& out);     // the local player's car now
 void Place(const Pose& p); // the local car moved there, stopped ("take me to my partner")
 
-// a partner's car in this world, from its latest pose and the time it was sent
-void Drive(int player, const Pose& p, uint64_t at_ms);
-void Remove(int player);
-void Tick(uint64_t now_ms);  // the mod's tick: puppets stepped toward their targets
+bool LocalCarCfg(uint8_t out[kCarCfgBytes]);  // the career garage's selected car: what the partners will see
+
+// partners by race-setup slot (1..7): their own campaign car, then their poses with the time they were sent
+void SetPartnerCar(int slot, const uint8_t cfg[kCarCfgBytes]);
+void Drive(int slot, const Pose& p, uint64_t at_ms);
+void Remove(int slot);
+void SetGrid(int grid);     // this copy's place in the shared grid: the host 0, the partners 1..
+int PartnerSlots();          // partners with a car the setups now hold
+void Tick(uint64_t now_ms);  // the mod's tick: the setups kept, the partners' cars moved
 
 }  // namespace mod::car

@@ -43,7 +43,7 @@ constexpr uint64_t kTimeoutMs = 5000;
 
 constexpr uint32_t kMagic = 0x4F43334D;  // "M3CO"
 constexpr uint16_t kProtocol = 1;
-enum Type : uint8_t { kHello = 1, kWelcome, kState, kBye, kDiscover, kOffer, kRoster, kFull };
+enum Type : uint8_t { kHello = 1, kWelcome, kState, kBye, kDiscover, kOffer, kRoster, kFull, kCar };
 
 #pragma pack(push, 1)
 struct Header {
@@ -74,6 +74,10 @@ struct State {
     int8_t city;
     uint8_t pad[2];
     mod::car::Pose pose;
+};
+struct CarPacket {  // the sender's own campaign car, the game's CarCfg as it is
+    Header h;
+    uint8_t cfg[mod::car::kCarCfgBytes];
 };
 #pragma pack(pop)
 constexpr int kMaxDatagram = 1170;  // also fits the EOS P2P transport
@@ -117,10 +121,19 @@ struct Participant {
     bool have = false, welcomed = false;
     net::Peer endpoint{};
     uint32_t session = 0, rx_seq = 0;
-    uint64_t last_rx = 0, last_tx = 0, last_hello = 0, state_at = 0;
+    uint64_t last_rx = 0, last_tx = 0, last_hello = 0, state_at = 0, car_tx = 0;
     State remote{};
 };
 std::array<Participant, kMaxPlayers> g_players;
+
+// the race-setup slot a partner's car takes in this copy's world: the local player is slot 0, the others 1.. in
+// player order
+int SlotOf(int player) {
+    int slot = 1;
+    for (int i = 0; i < player; i++)
+        if (i != g_local_player && g_players[i].have) slot++;
+    return slot;
+}
 
 uint64_t NowMs() {
     using namespace std::chrono;
@@ -178,7 +191,7 @@ void Sample(State& s, int to, uint64_t now) {
 }
 
 void Forget(int player) {
-    mod::car::Remove(player);
+    mod::car::Remove(SlotOf(player));
     g_players[player] = {};
 }
 
@@ -254,7 +267,7 @@ void Receive(uint64_t now) {
             source = slot;
             if (destination != 0) {  // for another client: pass it on
                 if (destination >= kMaxPlayers || destination == source || !g_players[destination].have ||
-                    in.h.session != g_players[source].session || in.h.type != kState)
+                    in.h.session != g_players[source].session || (in.h.type != kState && in.h.type != kCar))
                     continue;
                 g_players[source].last_rx = now;
                 net::Send(g_players[destination].endpoint, &in, n);
@@ -277,7 +290,7 @@ void Receive(uint64_t now) {
             p.session = in.h.session;
             p.rx_seq = 0;
             p.remote = {};
-            mod::car::Remove(source);
+            mod::car::Remove(SlotOf(source));
         }
         p.last_rx = now;
         switch (in.h.type) {
@@ -317,10 +330,14 @@ void Receive(uint64_t now) {
                         in.state.nickname, std::find(std::begin(in.state.nickname), std::end(in.state.nickname), '\0')));
                     p.state_at = now;
                     p.rx_seq = in.h.seq;
-                    if (in.state.in_play && in.state.city == mod::car::City() && mod::car::InPlay())
-                        mod::car::Drive(source, in.state.pose, in.h.ms);
-                    else
-                        mod::car::Remove(source);
+                    if (in.state.in_play && in.state.city == mod::car::City()) mod::car::Drive(SlotOf(source), in.state.pose, in.h.ms);
+                }
+                break;
+            case kCar:
+                if (n == int(sizeof(CarPacket))) {
+                    CarPacket car;
+                    std::memcpy(&car, &in, sizeof car);
+                    mod::car::SetPartnerCar(SlotOf(source), car.cfg);
                 }
                 break;
             case kBye:
@@ -355,6 +372,14 @@ void Send(uint64_t now) {
                 p.last_hello = now;
             }
             continue;
+        }
+        if (!p.car_tx || now - p.car_tx >= 1000) {  // the campaign car, again now and then: a lost one comes again
+            CarPacket car{};
+            if (mod::car::LocalCarCfg(car.cfg)) {
+                car.h = Make(kCar, i, now);
+                SendTo(i, &car, sizeof car);
+            }
+            p.car_tx = now;
         }
         if (now - p.last_tx < kSendMs) continue;
         p.last_tx = now;
@@ -679,6 +704,7 @@ void Frame() {
         }
     }
     if (g_rescue.exchange(false)) Rescue();
+    mod::car::SetGrid(g_net && g_cfg.role == Role::Join && g_local_player < kMaxPlayers ? g_local_player : 0);
     mod::car::Tick(now);
     if (g_net) Send(now);
     PublishSession();
