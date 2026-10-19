@@ -122,6 +122,27 @@ int main() {
     mod::car::Remove(1);mod::car::Tick(test_now);mod::race::Tick(true,false);
     assert(R32(race+0x1250)==1 && R32(setup+0x4C)==2 && R32(next_setup+0x4C)==2);
     assert(G<uint8_t>(race+0x6F4)==0); // no disconnect timer forfeit anymore
+    // Out of a race, only the career's worlds (mode 2) get the partner: the garage (5) and front end (3) build
+    // their players from these setups, and a second human there ends the runner.
+    Fixture();W32(holder+4,0);
+    mod::car::SetPartnerCar(1,cfg);
+    for(uint32_t mode:{5u,3u}) {
+        W32(0x53F2D4,mode);mod::car::Tick(test_now);
+        assert(R32(setup+0x4C)==1 && R32(next_setup+0x4C)==1);
+    }
+    W32(0x53F2D4,2);mod::car::Tick(test_now);
+    assert(R32(setup+0x4C)==2 && R32(next_setup+0x4C)==2);
+    mod::car::Remove(1);
+    W32(holder+4,race);W32(0x53F2D4,0);
+    // A series loads its next race natively (same race address reused): the serial's shared win must not carry over.
+    Fixture();mod::race::BeginRace(9);
+    W32(machine+4,5);mod::race::Tick(false,true);
+    mod::race::g_partner_won=true;
+    W32(machine+4,7);mod::race::Tick(false,true);
+    W32(machine+4,4);mod::race::Tick(false,true);
+    assert(mod::race::g_race_serial==0 && !mod::race::g_partner_won && mod::race::g_gate==mod::race::GatePhase::Off);
+    G<uint8_t>(local+0x5D)=0;W32(machine+4,5);mod::race::Tick(false,true);
+    assert(G<uint8_t>(local+0x5D)==0);
 
     Fixture();mod::race::Tick(true,true);NativeLocalFinish(true,700);
     mod::race::Tick(true,true);

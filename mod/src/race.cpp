@@ -65,6 +65,7 @@ uint32_t g_won_serial = 0, g_race_serial = 0;
 int32_t g_partner_prize = 0, g_out_prize = 0;
 bool g_prize_sent = false;
 uint32_t g_unsupported_race = 0, g_bound_race = 0;
+bool g_bound_ran = false, g_bound_ended = false;  // the bound race was seen running (2..6), then at its result (7+)
 std::string g_last;
 bool g_challenge_input = false;
 Setup g_setup_out{}, g_setup_in{};
@@ -633,8 +634,25 @@ void Tick(bool hosting, bool connected) {
     if (now < g_lights_until) Headlights();
     if (hosting) { HostTick(); CaptureHostSetup(); }
     else { PartnerTick(now); ApplyHostSetup(); }
-    if (!Cruise() && g_race_serial) g_bound_race = P(P(kRaceHolder) + 4);
-    else if (Cruise()) g_bound_race = 0;
+    // A series (tournament, club: 3-4 races in a row) loads its next race natively, with no start from the cruise:
+    // a new race object, or the same address reused after the result screen. That race is not this serial's: its
+    // shared win, finish gate and prize must not carry over (they ended it at once on one copy and held the other).
+    uint32_t loaded = Cruise() ? 0 : P(P(kRaceHolder) + 4);
+    int state = RaceState();
+    if (loaded && g_race_serial && g_bound_race &&
+        (loaded != g_bound_race || (g_bound_ended && state >= 2 && state <= 6))) {
+        Log("race: next race of a series, serial %u ends; this race counts for each career on its own", g_race_serial);
+        BeginRace(0);
+        ai::SetRace(0, -1, -1, false);
+    }
+    if (loaded && g_race_serial) {
+        if (g_bound_race != loaded) g_bound_ran = g_bound_ended = false;
+        g_bound_race = loaded;
+    } else if (!loaded) g_bound_race = 0, g_bound_ran = g_bound_ended = false;
+    if (loaded && loaded == g_bound_race) {
+        if (state >= 2 && state <= 6 && !g_bound_ended) g_bound_ran = true;
+        if (state >= 7 && g_bound_ran) g_bound_ended = true;
+    }
     RaceTick(true);
     g_challenge_input = now < g_lights_until || g_phase != 0;
 }

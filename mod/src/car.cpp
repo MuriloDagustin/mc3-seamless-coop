@@ -25,6 +25,7 @@ namespace {
 constexpr uint32_t kPlayerManager = 0x558814;  // +0x08 players[8], +0x28 count
 constexpr uint32_t kCareer = 0x557F0C;         // mcPgCareer*, +0x0C career data (+0x50 current city)
 constexpr uint32_t kSetupCurrent = 0x53F2E0, kSetupNext = 0x53F2E4;
+constexpr uint32_t kMode = 0x53F2D4;  // 2 career (cruise, races), 3 front end, 5 garage
 constexpr uint32_t kSetupHumans = 0x4C, kSetupViews = 0x50, kSetupNetwork = 0x108;
 constexpr uint32_t kSlot = 0x114, kSlotSize = 0x2C;  // slot i at setup + 0x114 + i * 0x2C
 constexpr uint32_t kSlotCar = 0x0C, kSlotPad = 0x10, kSlotHud = 0x14, kSlotPlayer = 0x18, kSlotOut = 0x26;
@@ -204,6 +205,10 @@ void KeepSetups() {
     for (int i = 1; i < 8; i++)
         if (g_remote[i].active && g_remote[i].have_cfg) humans = i + 1;
     for(int i=1;i<8;i++)Observe(g_remote[i],i);
+    // Only the career's cruise and races build the partner (mode [0x53F2D4] 2). The garage (5) and the front end (3)
+    // build their players from these setups too, and a second human there ends the runner (unresolved call at
+    // 0x6543B, then a fatal mid-entry PC 0x16002A): a partner going to the garage, or joining while in it.
+    if (!Ptr(kMode) || R32(kMode) != 2) humans = 1;
     for (uint32_t global : {kSetupCurrent, kSetupNext}) {
         uint32_t setup = Ptr(global) ? R32(global) : 0;
         if (!setup || !Mapped(setup,0x3E0)) continue;
