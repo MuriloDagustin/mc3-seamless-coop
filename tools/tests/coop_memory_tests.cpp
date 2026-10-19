@@ -89,7 +89,15 @@ void SetupAuthorityTests() {
 #include "finish_gate_tests.inc"
 #include "traffic_memory_tests.inc"
 #include "car_config_tests.inc"
+#include "host_street_tests.inc"
+#include "race_context_tests.inc"
+#include "world_pose_tests.inc"
 int main() {
+    RaceContextTests();
+    HostStreetTests();
+    HostMarkerPhaseTests();
+    WorldPoseTests();
+    WorldCreditTests();
     SetupAuthorityTests();
     AiMemoryTests();
     FinishGateTests();

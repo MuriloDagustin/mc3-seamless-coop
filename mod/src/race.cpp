@@ -22,6 +22,7 @@ constexpr uint32_t kRaceMachine = 0x557EEC;  // +4 race state: 5 go, 6 racing, 7
 constexpr uint32_t kRaceHolder = 0x533E24;   // [+4] the current race object (the cruise in free roam)
 constexpr uint32_t kGameState = 0x557ED0;    // +4 == 3: a state that skips the race end and the credit
 constexpr uint32_t kSetupCurrent = 0x53F2E0;
+constexpr uint32_t kMode = 0x53F2D4;        // 2 career world, 3 front end, 5 garage
 constexpr uint32_t kRaceDb = 0x557EE4;       // per city 0x50: +0x18 race names, +0x20 descriptors (0x30, start +0x14)
 constexpr uint32_t kCruiseVtable = 0x46A7D8;
 constexpr uint32_t kRecordVtable = 0x473E74;
@@ -43,19 +44,25 @@ std::mutex g_lock;
 uint32_t g_serial = 0, g_sent_id = 0;
 bool g_out_start = false;
 Start g_start_out{};
+Start g_active_start{};
+bool g_active_ready = false;
 // partner
 bool g_have_start = false, g_start_done = false;
 Start g_start_in{};
 uint32_t g_done_serial = 0;
 int g_phase = 0;  // 0 idle, 1 car outside the marker (it arms), 2 in it with the lights on, waiting for the trigger
+bool g_cancel_marker = false;
 float g_target[3] = {};
 uint32_t g_record_id = 0;
+uint32_t g_phase_cruise = 0, g_phase_setup = 0, g_phase_data = 0, g_phase_serial = 0;
+int g_phase_city = -1, g_phase_index = -1;
 uint8_t g_saved_hookman = 0xFF, g_saved_side = 0xFF;
 // the partner's own record of the host's race, its opponents and difficulty (+0x0B..+0x4B) taken from the host's
 // record for this start (the career race build 0x277AE0 reads them at the load) and given back once it has loaded
 uint8_t g_saved_fields[0x4C]{};
 bool g_fields_lent = false;
 uint16_t g_fields_id = 0;
+uint32_t g_fields_data = 0;
 uint64_t g_phase_at = 0;
 // both
 uint64_t g_lights_until = 0;  // the test's challenge: the lights kept on until then
@@ -68,7 +75,13 @@ uint32_t g_unsupported_race = 0, g_bound_race = 0;
 bool g_bound_ran = false, g_bound_ended = false;  // the bound race was seen running (2..6), then at its result (7+)
 std::string g_last;
 bool g_challenge_input = false;
+uint32_t g_street_guard = 0, g_street_setup = 0, g_street_career = 0;
+uint32_t g_street_data = 0, g_street_vehicle = 0, g_street_machine = 0;
+int8_t g_street_city = -1;
+uint8_t g_street_saved = 0;
+std::string g_notice;
 Setup g_setup_out{}, g_setup_in{};
+Setup g_pending_setup{};
 uint64_t g_setup_send_at = 0;
 bool g_have_setup = false;
 uint32_t g_setup_applied_revision = 0;
@@ -86,6 +99,8 @@ constexpr uint64_t kFinishWaitMs = 15000, kReplayWaitMs = 2500;
 
 void BeginRace(uint32_t serial) {
     g_race_serial = serial;
+    g_active_start = {};
+    g_active_ready = false;
     g_partner_won = g_out_won = g_won_sent = g_prize_sent = false;
     g_partner_prize = g_out_prize = 0;
     g_bound_race = 0;
@@ -103,12 +118,75 @@ void BeginRace(uint32_t serial) {
     g_gate_reason = g_gate_requested ? "awaiting_supported_race" : "off";
 }
 
+void ActivateStart(const Start& start, bool ready) {
+    BeginRace(start.serial);
+    g_active_start = start;
+    g_active_ready = ready;
+    if (g_pending_setup.serial == start.serial) {
+        g_setup_in = g_pending_setup;
+        g_have_setup = true;
+        g_pending_setup = {};
+    }
+    ai::SetRace(start.serial, start.city, start.race_idx, true);
+}
+
 uint32_t Cruise() {
     uint32_t race = P(P(kRaceHolder) + 4);
     return race && P(race) == kCruiseVtable ? race : 0;
 }
 
 int RaceState() { return int(P(P(kRaceMachine) + 4)); }
+
+// All four native street-start callsites test cruise+0D (RE-HOST-BLOQUEIO-LARGADA.md).
+// Borrow only the idle cruise's "reported" byte; a real race/result must retain its native value.
+bool IdleStreet() {
+    uint32_t setup = P(kSetupCurrent);
+    return P(kMode) == 2 && Cruise() && P(setup + 0x18) == 1 &&
+           Mapped(setup + 0x108, 1) && !G<uint8_t>(setup + 0x108) &&
+           RaceState() >= 2 && RaceState() < 7 && P(P(kCareer) + 0x2C) != 4;
+}
+
+void ReleaseStreetGuard() {
+    if (!g_street_guard) return;
+    const bool same = Cruise() == g_street_guard && P(kSetupCurrent) == g_street_setup &&
+        P(kCareer) == g_street_career && P(g_street_setup + 0x18) == 1 &&
+        P(g_street_career + 0x0C) == g_street_data && G<int8_t>(g_street_setup) == g_street_city &&
+        P(P(P(0x558814) + 8) + 0x14) == g_street_vehicle && P(kRaceMachine) == g_street_machine &&
+        !G<uint8_t>(g_street_setup + 0x108) && P(g_street_career + 0x2C) != 4 &&
+        RaceState() >= 2 && RaceState() < 7 && G<uint8_t>(g_street_guard + 0x0D) == 1;
+    // Garage/menu transitions can retain the old world. Suspend ownership without touching it;
+    // forgetting it here would leave our reported=1 behind if that same street world returns.
+    if (same && (P(kMode) == 3 || P(kMode) == 5)) return;
+    if (same && P(kMode) == 2) G<uint8_t>(g_street_guard + 0x0D) = g_street_saved;
+    g_street_guard = g_street_setup = g_street_career = 0;
+    g_street_data = g_street_vehicle = g_street_machine = 0;
+    g_street_city = -1;
+}
+
+void StreetGuard(bool hosting, bool connected) {
+    const bool authorized = g_phase || (g_have_start && g_start_in.serial != g_done_serial);
+    if (!connected || hosting || authorized || !IdleStreet()) {
+        ReleaseStreetGuard();
+        return;
+    }
+    uint32_t cruise = Cruise();
+    if (g_street_guard && (g_street_guard != cruise || g_street_setup != P(kSetupCurrent) ||
+                           g_street_career != P(kCareer) || g_street_data != P(P(kCareer) + 0x0C) ||
+                           g_street_city != G<int8_t>(P(kSetupCurrent)) || g_street_machine != P(kRaceMachine) ||
+                           g_street_vehicle != P(P(P(0x558814) + 8) + 0x14))) ReleaseStreetGuard();
+    if (!g_street_guard) {
+        if (G<uint8_t>(cruise + 0x0D)) return; // never own a pre-existing native result
+        g_street_guard = cruise;
+        g_street_setup = P(kSetupCurrent);
+        g_street_career = P(kCareer);
+        g_street_data = P(g_street_career + 0x0C);
+        g_street_city = G<int8_t>(g_street_setup);
+        g_street_machine = P(kRaceMachine);
+        g_street_vehicle = P(P(P(0x558814) + 8) + 0x14);
+        g_street_saved = G<uint8_t>(cruise + 0x0D);
+    }
+    G<uint8_t>(cruise + 0x0D) = 1;
+}
 
 // the open-race record of this copy with that id, or of that (City, RaceIdx)
 uint32_t FindRecord(uint32_t data, int id, int city, int race_idx) {
@@ -141,6 +219,23 @@ bool SetupMatches(uint32_t setup, int city, int race_idx) {
         if (!actual) return true;
     }
     return false;
+}
+
+const Start* SharedStart() {
+    if (!g_race_serial) return nullptr;
+    if (g_active_start.serial) return g_active_start.serial == g_race_serial ? &g_active_start : nullptr;
+    if (g_have_start && g_start_in.serial == g_race_serial) return &g_start_in;
+    if (g_start_out.serial == g_race_serial) return &g_start_out;
+    return nullptr;
+}
+
+bool MatchesSharedRace() {
+    const Start* start = SharedStart();
+    if (!start) return !g_active_start.serial; // legacy local flow has no transport identity
+    if (start == &g_active_start && !g_active_ready) return false;
+    if (start == &g_start_in && (!g_start_done || g_done_serial != g_race_serial)) return false;
+    // No expected identity is used only by the legacy/local flow. Network contexts require one.
+    return SetupMatches(P(kSetupCurrent), start->city, start->race_idx);
 }
 
 void CaptureHostSetup() {
@@ -207,8 +302,7 @@ void HostTick() {
     std::snprintf(s.name, sizeof s.name, "%s", RaceName(s.city, s.race_idx));
     g_start_out = s;
     g_out_start = true;
-    BeginRace(s.serial);
-    ai::SetRace(s.serial, s.city, s.race_idx, true);
+    ActivateStart(s, true);
     Log("race: host starts %s (city %d race %d)", s.name, s.city, s.race_idx);
 }
 
@@ -249,36 +343,75 @@ uint32_t EnsureRecord(uint32_t data, const Start& s) {
     return end;
 }
 
+bool MarkerStarted() {
+    uint32_t career = P(kCareer);
+    return g_phase && g_have_start && g_phase_serial == g_start_in.serial && P(kMode) == 2 &&
+           P(career + 0x0C) == g_phase_data &&
+           P(career + 0x2C) == 4 && G<uint16_t>(career + 0x34) == g_record_id;
+}
+
+bool MarkerContext() {
+    return g_have_start && g_phase_serial == g_start_in.serial && P(kMode) == 2 &&
+           Cruise() == g_phase_cruise && P(kSetupCurrent) == g_phase_setup &&
+           P(P(kCareer) + 0x0C) == g_phase_data && RaceState() >= 2 && RaceState() < 7 &&
+           Mapped(g_phase_setup, 1) && G<int8_t>(g_phase_setup) == g_phase_city;
+}
+
+void CancelMarker() {
+    if (!g_phase) return;
+    uint32_t data = P(P(kCareer) + 0x0C);
+    uint32_t rec = data == g_phase_data ? FindRecord(data, int(g_record_id), 0, 0) : 0;
+    if (rec && G<int8_t>(rec + 8) == g_phase_city && G<int16_t>(rec + 6) == g_phase_index) {
+        G<uint8_t>(rec + 9) = g_saved_hookman;
+        G<uint8_t>(rec + 10) = g_saved_side;
+        if (g_fields_lent && g_fields_data == data && g_fields_id == g_record_id)
+            std::memcpy(HostPtr(rec + 0x0B), g_saved_fields + 0x0B, kRecord - 0x0B);
+    }
+    if (g_fields_data == g_phase_data && g_fields_id == g_record_id) g_fields_lent = false;
+    g_phase = 0;
+    g_phase_cruise = g_phase_setup = g_phase_data = g_phase_serial = 0;
+}
+
 void PartnerTick(uint64_t now) {
+    // Garage/front end can retain stale world pointers. Never arm or teleport there.
+    if (P(kMode) != 2) {
+        if (g_have_start && g_start_in.serial != g_done_serial)
+            g_notice = "O host iniciou uma corrida — volte para a rua.";
+        return;
+    }
     uint32_t career = P(kCareer), data = P(career + 0x0C);
     if (!data) return;
     if (g_fields_lent && !Cruise() && RaceState() >= 2 && RaceState() <= 6) {  // the race has loaded: as it was
-        if (uint32_t rec = FindRecord(data, g_fields_id, 0, 0)) {
+        if (uint32_t rec = data == g_fields_data ? FindRecord(data, g_fields_id, 0, 0) : 0) {
             uint8_t hook = G<uint8_t>(rec + 0x09), side = G<uint8_t>(rec + 0x0A);
             std::memcpy(HostPtr(rec + 0x0B), g_saved_fields + 0x0B, kRecord - 0x0B);
             G<uint8_t>(rec + 0x09) = hook, G<uint8_t>(rec + 0x0A) = side;
         }
         g_fields_lent = false;
     }
-    if (g_phase == 1 && now - g_phase_at > 300) {  // armed outside: into the marker
-        car::Pose at;
-        if (car::Local(at)) {
-            for (int i = 0; i < 3; i++) at.m[3][i] = g_target[i];
-            car::Place(at);
-        }
-        g_phase = 2;
-    }
     if (g_phase >= 1) {  // waiting for this copy's own trigger
-        Headlights();
         uint32_t rec = FindRecord(data, int(g_record_id), 0, 0);
-        bool started = P(career + 0x2C) == 4 && G<uint16_t>(career + 0x34) == g_record_id;
+        bool started = MarkerStarted();
         if (started || now - g_phase_at > 10000) {
-            if (rec) G<uint8_t>(rec + 0x09) = g_saved_hookman, G<uint8_t>(rec + 0x0A) = g_saved_side;  // as it was
-            g_phase = 0;
-            g_start_done = true;
+            if (started) {
+                if (rec) G<uint8_t>(rec + 0x09) = g_saved_hookman, G<uint8_t>(rec + 0x0A) = g_saved_side;
+                g_phase = 0;
+            } else CancelMarker();
+            g_start_done = started;
+            if (g_active_start.serial == g_start_in.serial) g_active_ready = started;
             g_done_serial = g_start_in.serial;
             g_race_serial = g_start_in.serial;
             Log(started ? "race: started the host's race here" : "race: the host's race did not start here");
+        } else {
+            if (g_phase == 1 && now - g_phase_at > 300) {
+                car::Pose at;
+                if (car::Local(at)) {
+                    for (int i = 0; i < 3; i++) at.m[3][i] = g_target[i];
+                    car::Place(at);
+                }
+                g_phase = 2;
+            }
+            Headlights();
         }
         return;
     }
@@ -286,11 +419,19 @@ void PartnerTick(uint64_t now) {
     uint32_t cruise = Cruise();
     if (!cruise || RaceState() >= 7 || G<uint8_t>(cruise + 0x0D)) return;  // not in free roam now: later
     const Start& s = g_start_in;
+    if (g_active_start.serial != s.serial) ActivateStart(s, false);
     if (int(G<int8_t>(P(kSetupCurrent) + 0x00)) != s.city) {
         Log("race: the host's race is in city %d, this copy is in another", s.city);
         g_done_serial = s.serial;
         return;
     }
+    uint32_t desc = P(P(kRaceDb) + uint32_t(s.city) * 0x50 + 0x20) + uint32_t(s.race_idx) * 0x30;
+    if (!Ptr(desc + 0x1C)) {
+        g_done_serial = s.serial;
+        return;
+    }
+    car::Pose at;
+    if (!car::Local(at)) return; // validate everything needed before lending any record fields
     uint32_t rec = EnsureRecord(data, s);
     if (!rec) {
         g_done_serial = s.serial;
@@ -305,25 +446,24 @@ void PartnerTick(uint64_t now) {
         G<uint16_t>(rec + 0x1E) = task;                                 // this career's own task
         W32(rec + 0x20, task_name);                                     // never borrow a host pointer
         G<uint8_t>(rec + 0x24) = G<uint8_t>(rec + 0x24) & ~uint8_t(0x10);  // not 'new'
-        g_fields_lent = true, g_fields_id = uint16_t(g_record_id);
+        g_fields_lent = true, g_fields_id = uint16_t(g_record_id), g_fields_data = data;
         Log("race: this career's record of the race takes the host's opponents for this start");
     }
     g_saved_hookman = G<uint8_t>(rec + 0x09), g_saved_side = G<uint8_t>(rec + 0x0A);
     G<uint8_t>(rec + 0x09) = 0xFF, G<uint8_t>(rec + 0x0A) = 0xFF;  // the marker filter: any car class, no roaming hookman
     G<uint8_t>(cruise + 0x1250) = 1;                               // armed
     W32(cruise + 0x1258, 0xFFFFFFFF), W32(cruise + 0x125C, 0xFFFFFFFF);
-    uint32_t desc = P(P(kRaceDb) + uint32_t(s.city) * 0x50 + 0x20) + uint32_t(s.race_idx) * 0x30;
-    if (!Ptr(desc + 0x1C)) {
-        g_done_serial = s.serial;
-        return;
-    }
-    car::Pose at;
-    if (!car::Local(at)) return;
     g_target[0] = RF(desc + 0x14), g_target[1] = RF(desc + 0x18) + 0.5f, g_target[2] = RF(desc + 0x1C);
     at.m[3][0] = g_target[0] + 60.0f, at.m[3][1] = g_target[1], at.m[3][2] = g_target[2];  // outside first: it arms
     car::Place(at);
     G<uint8_t>(cruise + 0x1250) = 0;
     g_phase = 1;
+    g_phase_cruise = cruise;
+    g_phase_setup = P(kSetupCurrent);
+    g_phase_data = data;
+    g_phase_serial = s.serial;
+    g_phase_city = s.city;
+    g_phase_index = s.race_idx;
     g_phase_at = now;
     Log("race: taken to the start of %s", s.name);
 }
@@ -569,8 +709,12 @@ void RaceTick(bool connected) {
     if (!race || Cruise() || !Mapped(race + kEntry, kEntrySize)) return;
     if (P(P(kGameState) + 4) == 3) return;
     uint64_t now = GetTickCount64();
-    ConfigureGate(race, state);
+    const bool same_race = MatchesSharedRace();
+    if (same_race) ConfigureGate(race, state);
     CompleteRemoteRacers(race, state);
+    // Keep the no-HUD native callback guard even for an absent peer; its removal needs a separate rank recipe.
+    // Never import a result/prize/gate from an announced race into a different currently loaded race.
+    if (!same_race) return;
     ApplyPeerTerminal(race);
     ObserveLocalFinish(race, state, now);
     AdvanceGate(race, state, now, connected);
@@ -618,14 +762,14 @@ void RaceTick(bool connected) {
 void Tick(bool hosting, bool connected) {
     std::lock_guard lock(g_lock);
     uint64_t now = GetTickCount64();
+    g_notice.clear();
+    if (g_phase && (g_cancel_marker || !connected || hosting || (!MarkerStarted() && !MarkerContext()))) CancelMarker();
+    g_cancel_marker = false;
+    StreetGuard(hosting, connected); // release before PartnerTick tests cruise+0D
     g_challenge_input = connected && (now < g_lights_until || g_phase != 0);
     if (!connected) {
         g_have_start = false;
-        if (g_phase) {
-            uint32_t rec = FindRecord(P(P(kCareer) + 0x0C), int(g_record_id), 0, 0);
-            if (rec) G<uint8_t>(rec + 0x09) = g_saved_hookman, G<uint8_t>(rec + 0x0A) = g_saved_side;
-            g_phase = 0;
-        }
+        g_done_serial = 0;
         // Keep a received result only for this exact loaded race, not a later solo race/world.
         if (g_bound_race && !Cruise() && P(P(kRaceHolder) + 4) == g_bound_race) RaceTick(false);
         else g_partner_won = false, g_partner_prize = 0, g_race_serial = 0, g_bound_race = 0;
@@ -645,7 +789,7 @@ void Tick(bool hosting, bool connected) {
         BeginRace(0);
         ai::SetRace(0, -1, -1, false);
     }
-    if (loaded && g_race_serial) {
+    if (loaded && g_race_serial && MatchesSharedRace()) {
         if (g_bound_race != loaded) g_bound_ran = g_bound_ended = false;
         g_bound_race = loaded;
     } else if (!loaded) g_bound_race = 0, g_bound_ran = g_bound_ended = false;
@@ -662,13 +806,58 @@ bool ChallengeInput() {
     return g_challenge_input;
 }
 
+std::string Notice() {
+    std::lock_guard lock(g_lock);
+    return g_notice;
+}
+
+World Context() {
+    std::lock_guard lock(g_lock);
+    uint32_t setup = P(kSetupCurrent);
+    int state = RaceState();
+    if (P(kMode) != 2 || !Mapped(setup, 0x3D8) || G<uint8_t>(setup + 0x108) ||
+        state < 2 || state > 12) return {};
+    int8_t city = G<int8_t>(setup);
+    if (Cruise()) {
+        World w{0, -1, city, 1};
+        return P(setup + 0x18) == 1 && state < 7 && ValidWorld(w) ? w : World{};
+    }
+    const Start* start = SharedStart();
+    if (!start || !g_bound_race || !MatchesSharedRace() || P(P(kRaceHolder) + 4) != g_bound_race) return {};
+    World w{start->serial, start->race_idx, city, 2};
+    return ValidWorld(w) ? w : World{};
+}
+
+void ResetNetwork() {
+    std::lock_guard lock(g_lock);
+    g_cancel_marker = g_phase != 0;
+    g_have_start = g_start_done = g_out_start = false;
+    g_start_in = g_start_out = {};
+    g_pending_setup = {};
+    g_done_serial = g_sent_id = g_serial = 0;
+    g_challenge_input = false;
+    g_lights_until = 0;
+    BeginRace(0);
+    ai::SetRace(0, -1, -1, false);
+}
+
 void OnStart(const Start& s) {
     std::lock_guard lock(g_lock);
     if (!s.serial || s.city < 0 || s.city > 3 || s.race_idx < 0 || s.race_idx >= 160) return;
     if (g_have_start && int32_t(s.serial - g_start_in.serial) <= 0) return;
-    BeginRace(s.serial);
-    ai::SetRace(s.serial, s.city, s.race_idx, true);
+    // A host may request the next race while this copy is still finishing/saving the previous one.
+    // Keep its gate, real terminal result and prize until a street start can actually consume the request.
+    const Start* active = SharedStart();
+    const bool defer = active && g_bound_race && P(P(kRaceHolder) + 4) == g_bound_race &&
+                       !Cruise() && RaceState() >= 2 && RaceState() <= 12 && MatchesSharedRace();
+    if (defer) {
+        g_active_start = *active;
+        g_active_ready = true;
+    }
+    g_pending_setup = {};
+    if (!defer) ActivateStart(s, false);
     g_start_in = s;
+    g_start_done = false;
     g_start_in.name[sizeof s.name - 1] = 0;
     g_have_start = true;
     Log("race: the host starts %s", g_start_in.name);
@@ -724,16 +913,18 @@ bool TakeSetup(Setup& out) {
 
 void OnSetup(const Setup& setup) {
     std::lock_guard lock(g_lock);
-    if (!g_have_start || setup.serial != g_race_serial || !setup.revision || setup.reserved ||
+    if (!g_have_start || setup.serial != g_start_in.serial || !setup.revision || setup.reserved ||
         setup.city != g_start_in.city || setup.race_idx != g_start_in.race_idx || setup.opponent_limit > 100 ||
-        (g_have_setup && int32_t(setup.revision - g_setup_in.revision) <= 0)) return;
+        (setup.serial == g_race_serial ?
+            (g_have_setup && int32_t(setup.revision - g_setup_in.revision) <= 0) :
+            (g_pending_setup.serial && int32_t(setup.revision - g_pending_setup.revision) <= 0))) return;
     for (const auto& opponent : setup.opponents) {
         int32_t model;
         std::memcpy(&model, opponent, 4);
         if (model < -1 || model >= 127 || opponent[4] > 1 || opponent[0x27]) return;
     }
-    g_setup_in = setup;
-    g_have_setup = true;
+    if (setup.serial == g_race_serial) g_setup_in = setup, g_have_setup = true;
+    else g_pending_setup = setup;
 }
 
 bool TakeWon(uint32_t& serial, int32_t& prize) {
@@ -776,9 +967,9 @@ std::string GoToOpenRace(int index) {
 std::string Describe() {
     std::lock_guard lock(g_lock);
     char s[512];
-    std::snprintf(s, sizeof s, "race_state=%d cruise=%d phase=%d start_in=%s partner_won=%d won_sent=%d prize=%d gate=%d gate_reason=%s terminal=%d/%d",
+    std::snprintf(s, sizeof s, "race_state=%d cruise=%d phase=%d start_in=%s partner_won=%d won_sent=%d prize=%d gate=%d gate_reason=%s terminal=%d/%d street_hold=%d",
                   RaceState(), Cruise() != 0, g_phase, g_have_start ? g_start_in.name : "-", g_partner_won,
-                  g_won_sent, g_partner_prize, int(g_gate), g_gate_reason, g_local_finished, g_peer_finished);
+                  g_won_sent, g_partner_prize, int(g_gate), g_gate_reason, g_local_finished, g_peer_finished, g_street_guard != 0);
     return s;
 }
 

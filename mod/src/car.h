@@ -6,6 +6,7 @@
 // +0x74 brake, +0x78 handbrake. The car faces -row2.
 #include <cstdint>
 #include <string>
+#include "race_context.h"
 
 namespace mod::car {
 
@@ -31,6 +32,7 @@ bool LocalCarCfg(uint8_t out[kCarCfgBytes]);  // the career garage's selected ca
 void SetPartnerCar(int slot, const uint8_t cfg[kCarCfgBytes]);
 void OnPartnerCar(int slot, const uint8_t cfg[kCarCfgBytes], uint32_t sequence); // ordered network input
 void Drive(int slot, const Pose& p, uint64_t at_ms);
+void DriveWorld(int slot, const Pose& p, uint64_t at_ms, const race::World& world);
 void Remove(int slot);
 void SetGrid(int grid);     // this copy's place in the shared grid: the host 0, the partners 1..
 int PartnerSlots();          // partners with a car the setups now hold

@@ -45,7 +45,7 @@ constexpr uint64_t kHelloMs = 500;
 constexpr uint64_t kTimeoutMs = 5000;
 
 constexpr uint32_t kMagic = 0x4F43334D;  // "M3CO"
-constexpr uint16_t kProtocol = 5; // articulated traffic + wreck state; all copies must run the same build
+constexpr uint16_t kProtocol = 6; // pose world identity; all copies must run the same build
 enum Type : uint8_t { kHello = 1, kWelcome, kState, kBye, kDiscover, kOffer, kRoster, kFull, kCar, kRaceStart, kWon, kTraffic, kFinished, kAi, kRaceSetup };
 
 #pragma pack(push, 1)
@@ -76,6 +76,7 @@ struct State {
     uint8_t in_play;  // driving in the city
     int8_t city;
     uint8_t pad[2];
+    mod::race::World world;
     mod::car::Pose pose;
 };
 struct CarPacket {  // the sender's own campaign car, the game's CarCfg as it is
@@ -216,7 +217,8 @@ void Sample(State& s, int to, uint64_t now) {
     s.h = Make(kState, to, now);
     std::snprintf(s.nickname, sizeof s.nickname, "%s", g_nickname.c_str());
     s.city = int8_t(mod::car::City());
-    s.in_play = mod::car::InPlay() && mod::car::Local(s.pose) ? 1 : 0;
+    s.world = mod::race::Context();
+    s.in_play = mod::race::ValidWorld(s.world) && mod::car::InPlay() && mod::car::Local(s.pose) ? 1 : 0;
     if (!Finite(s)) s.in_play = 0, s.pose = {};
 }
 
@@ -317,6 +319,7 @@ void Receive(uint64_t now) {
         }
         Participant& p = g_players[source];
         if (in.h.session != p.session) {  // the partner started again: a new sequence, nothing of the old one
+            if (g_cfg.role == Role::Join && source == 0) mod::race::ResetNetwork();
             p.session = in.h.session;
             p.rx_seq = 0;
             p.remote = {};
@@ -360,7 +363,10 @@ void Receive(uint64_t now) {
                         in.state.nickname, std::find(std::begin(in.state.nickname), std::end(in.state.nickname), '\0')));
                     p.state_at = now;
                     p.rx_seq = in.h.seq;
-                    if (in.state.in_play && in.state.city == mod::car::City()) mod::car::Drive(SlotOf(source), in.state.pose, in.h.ms);
+                    if (in.state.in_play && in.state.city == in.state.world.city &&
+                        mod::race::MatchesWorld(in.state.world, mod::race::Context()))
+                        mod::car::DriveWorld(SlotOf(source), in.state.pose, in.h.ms, in.state.world);
+                    else mod::car::DriveWorld(SlotOf(source), {}, in.h.ms, {}); // invalidate old interpolation too
                 }
                 break;
             case kCar:
@@ -568,6 +574,7 @@ void StartSession() {
         }
         g_players[0].have = true;
     }
+    mod::race::ResetNetwork();
     g_net = true;
     if (g_cfg.online) LOGR("coop: starting online %s", g_cfg.role == Role::Host ? "host" : "join");
     else if (g_cfg.role == Role::Host) LOGR("coop: host on UDP %u", g_cfg.port);
@@ -605,7 +612,8 @@ const Participant* NearestPartner(int& player) {
     float best_d = 0;
     for (int i = 0; i < kMaxPlayers; i++) {
         const Participant& p = g_players[i];
-        if (!Connected(i) || !p.remote.in_play || p.remote.city != mod::car::City()) continue;
+        if (!Connected(i) || !p.remote.in_play || p.remote.city != mod::car::City() ||
+            !mod::race::MatchesWorld(p.remote.world, mod::race::Context())) continue;
         float d = 0;
         if (have_me)
             for (int k = 0; k < 3; k++) d += (p.remote.pose.m[3][k] - me.m[3][k]) * (p.remote.pose.m[3][k] - me.m[3][k]);

@@ -9,6 +9,7 @@
 //   Their real victory/prize arrives over the network; disconnects never count them a second time.
 #include <cstdint>
 #include <string>
+#include "race_context.h"
 
 namespace mod::race {
 
@@ -43,6 +44,9 @@ struct Setup {
 void Tick(bool hosting, bool connected);
 // Only merge into a successful, verified guest poll of controller 0, after reading the real/test pad.
 bool ChallengeInput();
+std::string Notice();  // short player-facing message, safe for the render thread
+World Context();      // strict loaded world identity; pending starts are not loaded races
+void ResetNetwork();  // new transport/host generation; native loans are released on the next game hook
 
 // session thread: what came from the others, what goes to them
 void OnStart(const Start& s);

@@ -107,3 +107,26 @@ Os novos guardas não foram usados para voltar a executar o jogo nesta etapa. O 
 Consulta real SOMENTE LEITURA de firewall para out/live-isolated/MC3Runner.exe executou sem elevação e recusou o caminho por não encontrar a regra ampla exigida pelo preflight. Nenhum runner foi iniciado. A importação de late_victory_test também foi conferida com sockets/parser bloqueados: não tem efeitos de rede ou execução ao importar.
 
 O item4 permanece na análise estática em RE-PENDENCIAS-MENORES.md. Pintura/peças exigem marcar dirty sem reintroduzir a máscara a cada frame; reconstrução de modelo e reboques ainda não têm implementação validada. Não foram feitas mudanças especulativas de runtime nesses itens. Os scripts históricos pair.py/xrun.py não devem ser usados durante a suspensão dos testes ao vivo; não possuem os novos guardas de firewall.
+
+## Continuação offline, 19/10: integração e autoridade de largada
+
+Base recebida na pasta principal: `780a698`, com as correções posteriores de garagem/desempenho preservadas. A seção histórica acima descreve builds anteriores; o estado seguinte corresponde aos fontes atuais, protocolo6. Nenhum commit/push nesta continuação.
+
+Integração anterior preservada: sincronização física de tráfego/articulação permanece opt-in por `MC3COOP_TRAFFIC_PHYSICS=1`, com cobertura sintética; não há validação nova de colisões ao vivo. Configurações compatíveis do mesmo modelo aplicam dirty uma vez por revisão/objeto; outro modelo fica pendente para a próxima construção nativa. Não foi descoberta uma reconstrução segura do carro completo por dados sem recarregar o mundo. Ver `RE-TROCA-CARRO-IMPLEMENTACAO.md`, `RE-TROCA-CARRO-FACTORY.md` e `RE-SYNC-TRAFEGO-FISICA.md`.
+
+Nesta continuação foram implementados o bloqueio de largadas próprias do parceiro na rua, o aviso de largada pendente na garagem e a identidade de mundo nos pacotes de posição. Posições de outra corrida e interpolação antiga são descartadas, preservando CarCfg e sua sequência. O ranking nativo ainda mantém a entrada do ausente concluída/DNF como proteção contra callback sem HUD; não afirmar exclusão do ausente da classificação.
+
+Uma largada recebida durante outra corrida fica pendente: não apaga gate, resultado, prêmio ou serial ativos. O setup da próxima autorização possui buffer/revisão próprios. Fases de marcador registram serial/cruise/setup/dados/cidade; substituição de autorização, troca de mundo ou geração de rede cancela a fase velha na thread do jogo antes de qualquer teleporte. Campos emprestados só são restaurados no registro ainda identificado. Timeout não equivale a largada bem-sucedida.
+
+Verificações finais:
+
+- `python tools/test_coop_memory.py`: PASS contra os fontes reais em RAM sintética. Inclui `RaceContextTests`, `HostStreetTests`, `HostMarkerPhaseTests`, `WorldPoseTests` e `WorldCreditTests`, além das suítes existentes de setup/IA, chegada tardia/ranking, tráfego físico e CarCfg.
+- Novos casos cobrem posse suspensa em garagem/frontend e retorno ao mesmo mundo, restauração ao desconectar, serial consumida, dados/cidade/máquina/veículo alterados na mesma VA, nova largada durante fase velha, reinício de sessão com serial1, timeout e ausência de teleporte indevido.
+- Contexto/posição: arquivo completo após o prefixo de32bytes, corrida ainda não alocada, garagem/menu, serial diferente e mudança local sem pacote novo; nenhum `Apply` de pose incompatível. Configuração/revisão/ordem permanecem preservadas.
+- Crédito: serial pendente não importa vitória/prêmio/terminal na corrida ativa; contexto incompatível não arma gate nem altera crédito. A autorização nova preserva o gate/prêmio antigos; ativação posterior consome seu setup separado. O caminho legado de crédito da identidade correta continua idempotente.
+- `cmd /c mod\build.cmd`: PASS, DLL em `out/mod/xinput1_4.dll`. Log `out/build-host-flow.log`; log da suíte `out/test-host-flow-memory.log`.
+- `git diff --check`: PASS. Avisos de normalização CRLF são do Git; não houve erro de whitespace.
+
+Não foram iniciados jogo, MC3Coop/MC3Runner, sockets de sessão ou testes de GUI. Nenhuma janela/foco, processo estrangeiro, regra de firewall ou UAC foi alterado. O teste sintético mantém a inspeção inerte de PE com `DONT_RESOLVE_DLL_REFERENCES`, sem executar código do runner. O pacote privado já entregue não foi regenerado nem publicado; protocolo6 exige atualizar os dois jogadores quando houver nova entrega.
+
+Pendências da prioridade1: espera no resultado/decisão pós-corrida, próxima etapa de série com serial nova, retorno à rua ao abandonar torneio ativo e remoção nativa da entrada ausente. A análise em `RE-HOST-FLUXO-RESULTADO.md` prova o gate limitado de12 para tipos1/3, mas também mostra callbacks de tarefa que podem sobrescrever a ação e inicialização que seria pulada ao suspender bytes isolados. Essas propostas não foram ativadas no runtime. Os critérios de duas cópias permanecem sem execução nesta etapa.

@@ -6,6 +6,7 @@
 
 #include "mod.h"
 #include "net/session.h"
+#include "race.h"
 #include "settings.h"
 #include "ui.h"
 
@@ -27,6 +28,8 @@ void DrawCoop() {
         port = int(session.port);
     }
     ImGui::TextUnformatted(session.status.c_str());
+    std::string notice = race::Notice();
+    if (!notice.empty()) ImGui::TextWrapped("%s", notice.c_str());
     if (session.running) ImGui::TextUnformatted(session.role == coop::Role::Host ? "You are the host" : "You joined a friend");
     if (!session.error.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.4f, 1.0f));
@@ -136,6 +139,9 @@ void DrawPanel(bool open) {
         if (coop::PartnerCar(r)) std::snprintf(line, sizeof line, "%s | %s", coop::Status(), r.nickname.c_str());
         else std::snprintf(line, sizeof line, "%s", coop::Status());
         ImGui::GetForegroundDrawList()->AddText(ImVec2(12, 10), IM_COL32(255, 220, 90, 230), line);
+        std::string notice = race::Notice();
+        if (!notice.empty()) ImGui::GetForegroundDrawList()->AddText(
+            ImVec2(12, 30), IM_COL32(255, 220, 90, 255), notice.c_str());
     }
     if (!open) return;
     ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 30, 0), ImGuiCond_FirstUseEver);

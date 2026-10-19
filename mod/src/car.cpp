@@ -17,6 +17,7 @@
 #include <mutex>
 
 #include "mod.h"
+#include "race.h"
 
 namespace mod::car {
 
@@ -120,6 +121,8 @@ struct Remote {
     std::deque<Sample> samples;
     int64_t clock_offset = 0;  // ours - theirs, the smallest seen (the fastest packet)
     bool offset_set = false;
+    bool scoped = false;
+    race::World world{};
 };
 std::mutex g_lock;
 std::array<Remote, 8> g_remote;
@@ -359,10 +362,7 @@ std::string Describe() {
                                 (unsigned long long)applications);return text;
 }
 
-void Drive(int slot, const Pose& p, uint64_t at_ms) {
-    if (slot < 1 || slot > 7) return;
-    std::lock_guard lock(g_lock);
-    Remote& r = g_remote[slot];
+void AddSample(Remote& r, const Pose& p, uint64_t at_ms) {
     r.active = true;
     uint64_t now = GetTickCount64();
     int64_t offset = int64_t(now) - int64_t(at_ms);
@@ -370,6 +370,25 @@ void Drive(int slot, const Pose& p, uint64_t at_ms) {
     if (!r.samples.empty() && at_ms <= r.samples.back().at) return;  // late or repeated
     r.samples.push_back({p, at_ms, now});
     while (r.samples.size() > 32) r.samples.pop_front();
+}
+
+void Drive(int slot, const Pose& p, uint64_t at_ms) {
+    if (slot < 1 || slot > 7) return;
+    std::lock_guard lock(g_lock);
+    AddSample(g_remote[slot], p, at_ms);
+}
+
+void DriveWorld(int slot, const Pose& p, uint64_t at_ms, const race::World& world) {
+    if (slot < 1 || slot > 7) return;
+    std::lock_guard lock(g_lock);
+    Remote& r = g_remote[slot];
+    if (!r.scoped || !race::MatchesWorld(r.world, world)) {
+        r.samples.clear();
+        r.offset_set = false;
+    }
+    r.scoped = true;
+    r.world = world;
+    if (race::ValidWorld(world)) AddSample(r, p, at_ms);
 }
 
 void Remove(int slot) {
@@ -393,6 +412,7 @@ void SetGrid(int grid) {
 
 void Tick(uint64_t) {
     uint64_t now = GetTickCount64();  // the clock Drive keeps the samples in
+    const race::World world = race::Context(); // acquire race lock before car lock (race Tick uses car methods)
     std::lock_guard lock(g_lock);
     KeepSetups();
     Chain local;
@@ -415,6 +435,11 @@ void Tick(uint64_t) {
     }
     for (int i = 1; i < 8; i++) {
         Remote& r = g_remote[i];
+        if (r.scoped && !race::MatchesWorld(r.world, world)) {
+            r.samples.clear();
+            r.offset_set = false;
+            continue;
+        }
         if (!r.active || r.samples.empty()) continue;
         if (now - r.samples.back().got > 3000) continue;  // not heard of late: its car stays where it was
         Chain c;
