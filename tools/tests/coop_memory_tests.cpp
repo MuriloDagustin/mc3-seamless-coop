@@ -87,6 +87,8 @@ void SetupAuthorityTests() {
 }
 #include "ai_memory_tests.inc"
 #include "finish_gate_tests.inc"
+#include "traffic_memory_tests.inc"
+#include "car_config_tests.inc"
 int main() {
     SetupAuthorityTests();
     AiMemoryTests();
@@ -169,12 +171,14 @@ int main() {
     W32(car+0x68,collider);W32(collider+0x10,body);
     for(uint32_t s:{slots,slots+0x21C}) {
         G<uint16_t>(s+0x2C)=10;W32(s+0xFC,0x135000);W32(s+0x100,0x135014);
-        G<float>(s+0x40+4)=1;G<float>(s+0x4C+8)=1;G<float>(s+0x58)=123;
+        G<float>(s+0x34)=1;G<float>(s+0x40+4)=1;G<float>(s+0x4C+8)=1;G<float>(s+0x58)=123;
     }
     std::vector<std::vector<uint8_t>> packets;
+    mod::traffic::Capture(test_now);
     assert(mod::traffic::Snapshot(packets,test_now));
     mod::traffic::Receive(packets[0].data(),int(packets[0].size()));
     W32(machine+4,0);mod::traffic::Tick(true,test_now);
+    mod::traffic::Capture(test_now+100);
     assert(R32(slots+0xFC)==0x135000 && !mod::traffic::Snapshot(packets,test_now+100));
     W32(machine+4,5);mod::traffic::Tick(true,test_now);
     assert(R32(slots+0xFC)==0 && R32(slots+0x100)==0);
@@ -185,4 +189,6 @@ int main() {
     mod::traffic::Stop();mod::traffic::Tick(false,test_now);
     assert(R32(slots+0xFC)==0x135000 && R32(slots+0x100)==0x135014);
     std::puts("PASS: remote without HUD; once-only completion/disconnect; 5->7 win; shared prize/duplicates/stale IDs/overflow; mode guards; read-only traffic diagnostics indexed by views.");
+    TrafficMemoryTests();
+    CarConfigTests();
 }

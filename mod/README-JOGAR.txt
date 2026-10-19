@@ -84,6 +84,10 @@ ESTADO DESTA VERSÃO
 - A espera usa uma segunda passagem local pela chegada. Pode repetir o aviso de chegada e incluir
   a espera no tempo registrado da corrida; não foi observado novo recorde falso de melhor volta.
 - Troca do carro remoto ainda exige recarregar o mundo (garagem/menu).
+- Nos fontes atuais, alterações compatíveis do mesmo modelo têm aplicação incremental implementada;
+  pintura/peças ainda precisam de confirmação visual no jogo. Outro modelo continua pendente para recarga.
+- Os fontes integrados usam protocolo 5; o ZIP dc25ed3 já entregue usa protocolo 4.
+  Não misture builds: ambos os jogadores precisam usar a mesma versão.
 - Salas EOS entre dois PCs ainda precisam do teste com o amigo; criar sala localmente não prova a conexão.
 
 OBSERVAÇÕES

@@ -1,5 +1,7 @@
 # Pendências menores — carro remoto e caminhões
 
+ATUALIZAÇÃO POSTERIOR: sincronização experimental de tráfego integrada na principal (`RE-SYNC-TRAFEGO-FISICA.md`). Instalação incremental de configuração do mesmo modelo implementada e testada em RAM (`RE-TROCA-CARRO-IMPLEMENTACAO.md`); troca completa de modelo sem recarga ainda sem caminho por dados. O texto abaixo registra a análise anterior. Correção: excluir bit80 da máscara não prova que seja bit de modelo; o setter271E00 associa-o aos bytesE0/E1, conforme `RE-TROCA-CARRO-RECURSOS.md`.
+
 Análise estática de 18/10/2026 em `C:\dev\mc3-coop`. Esta subtarefa não executou jogo, runner, testes em memória de processos ou comandos de encerramento. **As propostas deste documento não foram implementadas nem validadas no jogo.**
 
 VAs são do Xbox, com host = base + VA. CONFIRMADO indica evidência estática em comentários asm ou dados do XBE; PALPITE indica efeito ou integração que exige ensaio.

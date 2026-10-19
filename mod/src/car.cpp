@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <mutex>
@@ -35,6 +36,53 @@ struct Chain {
     uint32_t car = 0, inst = 0, body = 0;
 };
 
+constexpr uint32_t kTypeName = 0xE3, kTypeNameBytes = 0x16, kLiveDirty = 0x3F7F;
+bool ConfigPtr(uint32_t p) { return p >= 0x10000 && !(p & 3) && p <= UINT32_MAX-kCarCfgBytes && Mapped(p,kCarCfgBytes); }
+bool ValidName(const uint8_t* name) {
+    if (!name) return false;
+    for (uint32_t i=0;i<kTypeNameBytes;i++) {
+        uint8_t c=name[i];
+        if (!c) return i>0;
+        if (!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_')) return false;
+    }
+    return false;
+}
+bool ValidType(const uint8_t* cfg) { return cfg&&ValidName(cfg+kTypeName); }
+bool ValidConfig(const uint8_t* cfg) {
+    return ValidType(cfg) && std::memchr(cfg+0xF9,0,13)!=nullptr;
+}
+bool SameType(const uint8_t* a,const uint8_t* b) {
+    for (uint32_t i=0;i<kTypeNameBytes;i++) {
+        if(a[kTypeName+i]!=b[kTypeName+i])return false;
+        if(!a[kTypeName+i])return true;
+    }
+    return false;
+}
+bool SameResources(const uint8_t* a,const uint8_t* b) {
+    // 20566..205BB also requires a reload for E2 boolean / F9 string changes, even at the same TypeName.
+    if(!SameType(a,b)||bool(a[0xE2])!=bool(b[0xE2]))return false;
+    for(unsigned i=0;i<13;i++) {
+        if(a[0xF9+i]!=b[0xF9+i])return false;
+        if(!a[0xF9+i])return true;
+    }
+    return false;
+}
+// Native dirty bits and the local vtable are not part of the remote configuration's identity.
+bool SameConfig(const uint8_t* a,const uint8_t* b) {
+    return !std::memcmp(a+4,b+4,4) && !std::memcmp(a+0x0C,b+0x0C,kCarCfgBytes-0x0C);
+}
+uint32_t Read(uint32_t p) { return Ptr(p)?R32(p):0; }
+struct Loaded {
+    uint32_t manager=0, player=0, vehicle=0, cfg=0, custom=0, race=0;
+};
+Loaded LoadedCar(int slot) {
+    Loaded out;out.manager=Read(kPlayerManager);uint32_t count=Read(out.manager+0x28);
+    if(!count||count>8||slot<0||uint32_t(slot)>=count)return out;
+    out.player=Read(out.manager+8+uint32_t(slot)*4);out.vehicle=Read(out.player+0x14);
+    if(out.vehicle && Mapped(out.vehicle,0x6C))out.cfg=Read(out.vehicle+0x64),out.custom=Read(out.vehicle+0x68);
+    out.race=Read(Read(0x533E24)+4);return out;
+}
+
 // player i's car, phInst and rigid body, or false
 bool PlayerChain(int i, Chain& c) {
     uint32_t mgr = Ptr(kPlayerManager) ? R32(kPlayerManager) : 0;
@@ -56,6 +104,13 @@ struct Remote {
     bool active = false;
     std::array<uint8_t, kCarCfgBytes> cfg{};
     bool have_cfg = false;
+    uint64_t revision = 0, binding_revision = 0, applications = 0;
+    uint32_t cfg_sequence = 0; bool have_sequence = false;
+    Loaded binding{};
+    std::array<uint8_t,kCarCfgBytes> loaded_cfg{};
+    bool known_model = false, model_pending = false;
+    struct Installed { uint32_t target=0, vtable=0; uint64_t revision=0, binding=0; };
+    std::array<Installed,3> installed{}; // current setup, next setup, loaded vehicle
     struct Sample {
         Pose pose;
         uint64_t at;  // the sender's clock, ms
@@ -78,11 +133,65 @@ uint64_t g_world_at = 0;
 bool g_grid_done = false;
 constexpr uint64_t kSettleMs = 1000;
 
-void WriteSlot(uint32_t setup, int slot, const Remote& r) {
+void Observe(Remote& r,int slot) {
+    Loaded live=LoadedCar(slot);
+    if(live.manager!=r.binding.manager||live.player!=r.binding.player||live.vehicle!=r.binding.vehicle||
+       live.cfg!=r.binding.cfg||live.custom!=r.binding.custom||live.race!=r.binding.race) {
+        r.binding=live;r.binding_revision++;r.installed={};r.known_model=false;
+    }
+    if(!r.known_model&&live.vehicle&&ConfigPtr(live.cfg)&&ValidConfig(static_cast<const uint8_t*>(HostPtr(live.cfg)))) {
+        std::memcpy(r.loaded_cfg.data(),HostPtr(live.cfg),kCarCfgBytes);
+        if(!live.custom)r.known_model=true; // still constructing; no drawing resource to contradict the config
+        else if(Read(live.custom)==0x454ADC && live.custom<=UINT32_MAX-0x106C && Mapped(live.custom,0x106C) &&
+                ValidName(static_cast<const uint8_t*>(HostPtr(live.custom+0x102C)))) {
+            // F44E0..F4548 retains the construction name independently from CarCfg. Prefer the real model.
+            std::memcpy(r.loaded_cfg.data()+kTypeName,HostPtr(live.custom+0x102C),kTypeNameBytes);r.known_model=true;
+        }
+    }
+    r.model_pending = r.have_cfg && live.vehicle && (!r.known_model || !SameResources(r.cfg.data(),r.loaded_cfg.data()));
+}
+
+bool Overlaps(uint32_t a,uint32_t b) {
+    return ConfigPtr(a)&&ConfigPtr(b)&&uint64_t(a)<uint64_t(b)+kCarCfgBytes&&uint64_t(b)<uint64_t(a)+kCarCfgBytes;
+}
+
+void Install(Remote& r,int slot,int target,uint32_t cfg,bool allow_model_change) {
+    if(!r.have_cfg||!ConfigPtr(cfg))return;
+    // Never overwrite another player's configuration through an alias, including overlapping objects.
+    for(int i=0;i<8;i++)if(i!=slot && Overlaps(cfg,LoadedCar(i).cfg))return;
+    for(uint32_t global:{kSetupCurrent,kSetupNext}) {
+        uint32_t setup=Read(global);
+        if(!setup||!Mapped(setup,kSlot+8*kSlotSize))continue;
+        for(int i=0;i<8;i++)if(i!=slot && Overlaps(cfg,Read(setup+kSlot+uint32_t(i)*kSlotSize+kSlotCar)))return;
+    }
+    if(r.binding.vehicle) {
+        // A different model must not be paired with the old mesh/body/audio. Only independent NEXT data may
+        // be staged; the current/live configuration remains the comparison base for the native next load.
+        if(r.model_pending && (!allow_model_change||Overlaps(cfg,r.binding.cfg)))return;
+        uint32_t current=Read(kSetupCurrent);
+        if(r.model_pending && current && Mapped(current,kSlot+8*kSlotSize) &&
+           Overlaps(cfg,Read(current+kSlot+uint32_t(slot)*kSlotSize+kSlotCar)))return;
+        if(!r.model_pending && !r.known_model)return;
+    }
+    uint32_t vtable=R32(cfg);
+    for(const auto& prior:r.installed)if(prior.target==cfg&&prior.vtable==vtable&&prior.revision==r.revision&&
+        prior.binding==r.binding_revision && ValidConfig(static_cast<const uint8_t*>(HostPtr(cfg))) &&
+        SameResources(static_cast<const uint8_t*>(HostPtr(cfg)),r.cfg.data())) { r.installed[size_t(target)]=prior;return; }
+    // CopyFrom271E20 preserves the vtable and marks dirtiness locally. Never copy the sender's transient mask.
+    uint32_t dirty=R32(cfg+8);
+    std::memcpy(HostPtr(cfg+4),r.cfg.data()+4,4);
+    std::memcpy(HostPtr(cfg+0x0C),r.cfg.data()+0x0C,kCarCfgBytes-0x0C);
+    // 3FFF is CopyFrom's aggregate mask. Bit80 belongs to E0/E1 (271E00), not to a model rebuild request.
+    bool full=allow_model_change&&(!r.binding.vehicle||r.model_pending);
+    W32(cfg+8,dirty|(full?0x3FFFu:kLiveDirty));
+    r.installed[size_t(target)]={cfg,vtable,r.revision,r.binding_revision};r.applications++;
+}
+
+void WriteSlot(uint32_t setup, int slot, Remote& r, bool next) {
     uint32_t s = setup + kSlot + uint32_t(slot) * kSlotSize;
     uint32_t cfg = R32(s + kSlotCar);
-    if (Ptr(cfg) && r.have_cfg)  // the CarCfg object the setup owns: keep its vtable, take the partner's fields
-        std::memcpy(HostPtr(cfg + 4), r.cfg.data() + 4, kCarCfgBytes - 4);
+    // NEXT may share the loaded configuration. Install's alias guard keeps a pending model out of it.
+    Install(r,slot,next?1:0,cfg,next||!r.binding.vehicle);
     W32(s + kSlotPad, 0xFFFFFFFF);
     W32(s + kSlotHud, 0xFFFFFFFF);  // no HUD/camera: never request a second viewport
     W32(s + kSlotPlayer, 0xFFFFFFFF);
@@ -94,9 +203,10 @@ void KeepSetups() {
     int humans = 1;
     for (int i = 1; i < 8; i++)
         if (g_remote[i].active && g_remote[i].have_cfg) humans = i + 1;
+    for(int i=1;i<8;i++)Observe(g_remote[i],i);
     for (uint32_t global : {kSetupCurrent, kSetupNext}) {
         uint32_t setup = Ptr(global) ? R32(global) : 0;
-        if (!Ptr(setup + 0x3E0 - 4)) continue;
+        if (!setup || !Mapped(setup,0x3E0)) continue;
         if (G<uint8_t>(setup + kSetupNetwork)) continue;  // the game's own multiplayer modes: leave them alone
         int slots = humans;
         // A loaded race owns these players/progress entries. Disconnecting must not change its human count:
@@ -109,9 +219,15 @@ void KeepSetups() {
             int existing = Ptr(current + kSetupHumans) ? int(R32(current + kSetupHumans)) : 0;
             if (existing >= 1 && existing <= 8) slots = existing;
         }
-        for (int i = 1; i < slots; i++) WriteSlot(setup, i, g_remote[i]);
+        for (int i = 1; i < slots; i++) WriteSlot(setup, i, g_remote[i],global==kSetupNext);
         if (int(R32(setup + kSetupHumans)) != slots) W32(setup + kSetupHumans, uint32_t(slots));
         if (R32(setup + kSetupViews) != 1) W32(setup + kSetupViews, 1);
+    }
+    uint32_t current=Read(kSetupCurrent);
+    bool native_net=current&&Mapped(current,0x109)&&G<uint8_t>(current+kSetupNetwork);
+    for(int i=1;i<8 && !native_net;i++) {
+        Remote& r=g_remote[i];
+        if(r.active && !r.model_pending && r.binding.vehicle)Install(r,i,2,r.binding.cfg,false);
     }
     g_slots_written = humans > 1;
 }
@@ -193,7 +309,7 @@ bool LocalCarCfg(uint8_t out[kCarCfgBytes]) {
     uint32_t cfg = kGarage + uint32_t(selected) * kCarCfgBytes;
     if (!Mapped(cfg, kCarCfgBytes)) return false;
     std::memcpy(out, HostPtr(cfg), kCarCfgBytes);
-    return out[0xE3] != 0;  // a model name
+    return ValidConfig(out);
 }
 
 void Place(const Pose& p) {
@@ -207,14 +323,35 @@ void Place(const Pose& p) {
     Log("car: placed at %.1f %.1f %.1f", double(p.m[3][0]), double(p.m[3][1]), double(p.m[3][2]));
 }
 
-void SetPartnerCar(int slot, const uint8_t cfg[kCarCfgBytes]) {
-    if (slot < 1 || slot > 7) return;
+static void StoreConfig(int slot, const uint8_t cfg[kCarCfgBytes], bool ordered, uint32_t sequence) {
+    if (slot < 1 || slot > 7 || !ValidConfig(cfg)) return;
     std::lock_guard lock(g_lock);
     Remote& r = g_remote[slot];
-    bool changed = !r.have_cfg || std::memcmp(r.cfg.data(), cfg, kCarCfgBytes);
-    std::memcpy(r.cfg.data(), cfg, kCarCfgBytes);
+    if(ordered) {
+        if(r.have_sequence&&int32_t(sequence-r.cfg_sequence)<=0)return;
+        r.have_sequence=true;r.cfg_sequence=sequence;
+    }
+    bool changed = !r.have_cfg || !SameConfig(r.cfg.data(),cfg);
+    if(changed) {
+        std::memcpy(r.cfg.data(), cfg, kCarCfgBytes);
+        std::memset(r.cfg.data()+8,0,4); // foreign dirty bits are consumed on the other PC
+        if(!++r.revision)++r.revision;
+    }
     r.have_cfg = r.active = true;
     if (changed) Log("car: slot %d partner car %.22s", slot, reinterpret_cast<const char*>(cfg + 0xE3));
+}
+
+void SetPartnerCar(int slot, const uint8_t cfg[kCarCfgBytes]) { StoreConfig(slot,cfg,false,0); }
+void OnPartnerCar(int slot, const uint8_t cfg[kCarCfgBytes], uint32_t sequence) { StoreConfig(slot,cfg,true,sequence); }
+
+std::string Describe() {
+    std::lock_guard lock(g_lock);
+    int active=0,pending=0;uint64_t applications=0;
+    for(int i=1;i<8;i++)if(g_remote[i].active&&g_remote[i].have_cfg) {
+        active++;pending+=g_remote[i].model_pending;applications+=g_remote[i].applications;
+    }
+    char text[160];std::snprintf(text,sizeof text,"remote_cfg=%d car_model_pending=%d cfg_applied=%llu",active,pending,
+                                (unsigned long long)applications);return text;
 }
 
 void Drive(int slot, const Pose& p, uint64_t at_ms) {

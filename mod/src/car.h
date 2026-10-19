@@ -5,6 +5,7 @@
 // +0x50, matrix +0x5C with the position at +0x80), speed car+0xB0, controls car+0x6C steer, +0x70 throttle,
 // +0x74 brake, +0x78 handbrake. The car faces -row2.
 #include <cstdint>
+#include <string>
 
 namespace mod::car {
 
@@ -28,10 +29,12 @@ bool LocalCarCfg(uint8_t out[kCarCfgBytes]);  // the career garage's selected ca
 
 // partners by race-setup slot (1..7): their own campaign car, then their poses with the time they were sent
 void SetPartnerCar(int slot, const uint8_t cfg[kCarCfgBytes]);
+void OnPartnerCar(int slot, const uint8_t cfg[kCarCfgBytes], uint32_t sequence); // ordered network input
 void Drive(int slot, const Pose& p, uint64_t at_ms);
 void Remove(int slot);
 void SetGrid(int grid);     // this copy's place in the shared grid: the host 0, the partners 1..
 int PartnerSlots();          // partners with a car the setups now hold
-void Tick(uint64_t now_ms);  // the mod's tick: the setups kept, the partners' cars moved
+void Tick(uint64_t now_ms);  // game-thread hook: setup/config writes and partner poses
+std::string Describe();     // installed/pending remote configurations, diagnostics only
 
 }  // namespace mod::car

@@ -45,7 +45,7 @@ constexpr uint64_t kHelloMs = 500;
 constexpr uint64_t kTimeoutMs = 5000;
 
 constexpr uint32_t kMagic = 0x4F43334D;  // "M3CO"
-constexpr uint16_t kProtocol = 4; // terminal human ranking context; all copies must run the same build
+constexpr uint16_t kProtocol = 5; // articulated traffic + wreck state; all copies must run the same build
 enum Type : uint8_t { kHello = 1, kWelcome, kState, kBye, kDiscover, kOffer, kRoster, kFull, kCar, kRaceStart, kWon, kTraffic, kFinished, kAi, kRaceSetup };
 
 #pragma pack(push, 1)
@@ -367,7 +367,7 @@ void Receive(uint64_t now) {
                 if (n == int(sizeof(CarPacket))) {
                     CarPacket car;
                     std::memcpy(&car, &in, sizeof car);
-                    mod::car::SetPartnerCar(SlotOf(source), car.cfg);
+                    mod::car::OnPartnerCar(SlotOf(source), car.cfg, in.h.seq);
                 }
                 break;
             case kRaceStart:
@@ -845,7 +845,6 @@ void Frame() {
     }
     if (g_rescue.exchange(false)) Rescue();
     mod::car::SetGrid(g_net && g_cfg.role == Role::Join && g_local_player < kMaxPlayers ? g_local_player : 0);
-    mod::car::Tick(now);
     if (g_net) Send(now);
     PublishSession();
 }

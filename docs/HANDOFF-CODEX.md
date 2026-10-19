@@ -1,5 +1,17 @@
 # Handoff para o Codex — co-op do MC3 (18/10/2026, ~14h30)
 
+## Worktree de sincronização — atualização posterior
+
+O usuário pediu trabalhar sincronização de reboques/acidentes numa worktree separada e depois autorizou integrá-la. Os dez arquivos foram integrados na principal `C:\dev\mc3-coop`, branch `coop-noite`, a partir da worktree `codex-sincronizacao-trafego` baseada em `dc25ed3`. O ZIP já entregue permanece intacto. Estado e validação: `docs/RE-SYNC-TRAFEGO-FISICA.md`; evidência asm: `docs/RE-SYNC-TRAFEGO-ASM.md`.
+
+Implementação experimental opt-in `MC3COOP_TRAFFIC_PHYSICS=1`, protocolo de sessão5 incompatível com o ZIP de protocolo4. Replicação host→parceiro de reboque e dois corpos existentes, proxy quando não há corpo, captura no gancho da thread do jogo, publicação de ciclos completos e restauração validada em RAM. Colisões reais, grade física e impactos vistos somente pelo parceiro NÃO foram validados/resolvidos por esta etapa. Não distribuir este build como correção comprovada. A suspensão de jogo/UAC/firewall continua valendo. Sem commit/merge/push nesta etapa; integração feita nos arquivos de trabalho após conferir a principal limpa e a mesma base.
+
+## Carro remoto — continuação após a integração
+
+Implementada a instalação da configuração do mesmo modelo uma vez por revisão/objeto, preservando vtable e máscara local, marcando `3F7F` para consumo nativo e atualizando também `vehicle+64`. Recepção ordenada de configurações independente das poses. `car::Tick` saiu da thread de sessão e roda no gancho antes de `race::Tick`. Modelo diferente fica pendente; só NEXT independente recebe os dados para a próxima carga nativa, preservando a base CURRENT e protegendo aliases locais. Diagnóstico `car_model_pending`. Testes de memória passaram; visual/peças no jogo ainda não verificados.
+
+**Trocar o modelo inteiro sem recarregar o mundo continua NÃO implementado.** Investigação não encontrou pedido por slot consumido pelo jogo: factory temporária, updates não recriam, categoria3 destrói corrida/OppMgr/jogadores/tráfego, showroom não instala em player. Não zerar `player+14`, não forjar ponteiros, não chamar funções guest e não marcar loader carregado=false como se fosse request. Detalhes: `RE-TROCA-CARRO-IMPLEMENTACAO.md`, `RE-TROCA-CARRO-FACTORY.md` e `RE-TROCA-CARRO-RECURSOS.md`. Bit80 não é pedido de modelo; o setter271E00 escreve E0/E1.
+
 Responda em português. Trabalhe em `C:\dev\mc3-coop` (branch `coop-noite`). Commits locais podem ser feitos ao fim de cada item testado. **Nunca faça push.**
 
 ## Interrupção por avisos de firewall — atualização Codex

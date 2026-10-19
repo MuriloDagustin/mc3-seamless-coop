@@ -44,7 +44,7 @@ void Loop() {
             // Race counter/payment stores must never race with the guest's own finish callback.
             // Without a verified input hook, wait instead of doing that read/modify/write on this OS thread.
             bool waiting = coop::Networked() && GetTickCount64() - g_fiber_at > 250;
-            if (waiting && !warned_no_hook) Log("game: waiting for guest xinput hook; race/traffic writes suspended");
+            if (waiting && !warned_no_hook) Log("game: waiting for guest xinput hook; car/race/traffic writes suspended");
             warned_no_hook = waiting;
         } catch (...) {
             Log("game: session tick threw");
@@ -77,8 +77,10 @@ void FiberTick() {
     last = now;
     g_fiber_at = now;
     try {
+        car::Tick(now);
         race::Tick(coop::Hosting(), coop::PlayerCount() > 1 && coop::Networked());
         traffic::Tick(coop::Networked() && !coop::Hosting(), now);
+        if (coop::Networked() && coop::Hosting()) traffic::Capture(now);
         ai::Tick(coop::Networked() && !coop::Hosting(), now);
     } catch (...) {
     }
@@ -98,7 +100,7 @@ std::string State() {
                   double(-p.m[2][2]), double(speed), double(p.throttle));
     char hook[96];
     std::snprintf(hook, sizeof hook, " xinput_guest=%u xinput_ret=%llX", g_xinput_guest.load(), (unsigned long long)g_xinput_ret.load());
-    return std::string(s) + hook + " " + race::Describe() + " " + traffic::Describe() + " " + ai::Describe();
+    return std::string(s) + hook + " " + car::Describe() + " " + race::Describe() + " " + traffic::Describe() + " " + ai::Describe();
 }
 
 }  // namespace mod::game
