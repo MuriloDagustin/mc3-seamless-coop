@@ -90,3 +90,11 @@ python tools\ctl.py <porta> state|shot <nome>|players|peek <addr> [n]
 - Carreira `[0x557F0C]`: `+0x0C` dados da carreira, `+0x2C == 4` quando há largada pedida, `+0x34` id da corrida.
 - OppMgr `[0x534074]`: `+0` total, `+4` competidores, `+8` array com entradas de 0x43C.
 - Tráfego: `tm = [[0x50152C]+8]`, pool em `tm+0x130`, slots de 0x21C bytes.
+
+## BUG CRÍTICO (teste real, 18/10 22:55): o parceiro crasha ao conectar
+- Log do amigo (runner novo `linked=0x6AD54432`): AV em `MC3Runner.exe+0x129F2E8`, ~10 s depois de `joined ... as player 2` e `car: slot 1 partner car vp_jetta_03`.
+- Pilha do guest: `sub_002BFE50+0xA7A` (ctor do player) → `sub_002BF920+0x1B6` (objeto em player+0xC8, chamado SEMPRE pelo ctor em 0x2C007C) → `sub_0021AC90+0x28E` → `sub_0021A280+0x708` → `sub_00217F20+0xA8`.
+- No crash: `edi = 0x501238`, a string `"Hud_MC3_GARAGE:HUD_HAND_OF_GOD"`; `esi = CDCDCDCD` (não inicializado). O HUD ativo era o da GARAGEM quando o jogador 2 foi construído.
+- **Hipótese:** `car::KeepSetups` escreve `humanos = 2` nos setups assim que há um parceiro com CarCfg, inclusive enquanto a cópia está na garagem ou no front-end (a garagem constrói players por `0x2CBAE0`). Montar o player 1 nesse contexto quebra.
+- **Correção pedida:** só escrever `+0x4C = 2` e a vaga 1 nos setups quando a cópia está carregando ou dentro de um mundo de carreira (cruise ou corrida). Nos menus e na garagem, manter 1 humano; revisar também o fluxo de saída da garagem. Depois testar: conectar, entrar na garagem, trocar de carro e sair, com carros de modelos diferentes nos dois lados (um tC e um Jetta, por exemplo).
+- Antes disso, o usuário foi orientado a conectar no menu principal, dar Start Career direto e não entrar na garagem conectado.
