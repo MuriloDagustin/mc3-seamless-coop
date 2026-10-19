@@ -1,56 +1,54 @@
-# Game Title - XBE Recomp
+# MC3 Seamless Co-op
 
-An unofficial native PC port of the original Xbox version of Game Title, with extended graphics options and other enhancements.
+🇧🇷 [Leia em português](README.pt-BR.md)
 
-This port was created using the [Xbox XBE Recomp](https://github.com/TGP482/XboxXBE-Recomp) tool.
+Play the career of **Midnight Club 3: DUB Edition Remix** (Rockstar, Xbox) together with a friend, on PC.
 
-> [!NOTE]
-> This project does not include any game assets. You must provide the files from your own legally acquired copy of the game to install or build.
+This is a mod for the xrevive runner of the original Xbox game. The game's online
+mode is gone, and its career is single player: everything here is built on top of the game's own code.
+**It is a test version:** expect rough edges and crashes.
 
-## Installation
+> **You need your own copy of the game, already working in xrevive.** This repository contains only the
+> co-op code. It has no game files and no code from xrevive.
 
-- Put your game files in the `assets` folder. This can be an ISO, or the extracted data files.
-- Run `Game.exe`.
-- Recomp settings can be adjusted in `settings.toml` beside the exe.
+## Like Elden Ring Seamless Co-op
 
-## Features
+- Each player drives **the car of their own career**; your partner's car shows up in your city.
+- **Both careers progress.** A race the host starts is raced by both; when either player wins, the race
+  counts as won in both careers (a partner who has not unlocked it yet still races and gets the credit).
+- The race's opponents and the city traffic are the host's, synchronized to the partner.
 
-### Display
+## Playing
 
+1. Build the mod (below), or get the test package from someone who did, and extract it anywhere.
+2. Close xrevive and run `MC3Coop.exe`: it finds the game, prepares a copy of the runner beside itself and
+   loads the mod in it. The game folder is never changed.
+3. In the **main menu**, press **F10 → CO-OP**:
+   - **Online room** (Epic Online Services): one player creates a room and sends the code, the other types
+     it. Needs `coop-online.toml` with your own EOS credentials (see `config/coop-online.example.toml`).
+   - **By IP**: one player hosts, the other joins the host's IP (UDP 45410 reachable on the host).
+4. Then both enter the career. **F8** (or *Take me to my partner*) takes you to your partner.
 
-### Graphics
+Connect before entering the career: the partner's car is built when the city loads.
 
-### Controller
-Supports Xbox, PlayStation and Switch controllers, with hot plugging and rumble.
+## Status
 
-### General
+Works in tests (two copies on one PC, and two PCs over EOS): connection, both cars in the same city,
+starting a career race together, AI opponents and traffic synchronized, wins counted for both.
 
-### Miscellaneous
-- **Boot Splash** - Place a `splash.png` (or `.bmp`) beside the exe to display a splash screen at launch.
+Known problems: a crash when the partner connects while the host is in the garage, a crash when a race
+ends into the garage, and race series (sprint, circuit) can get out of step between the two players.
+See [docs/HANDOFF-CODEX.md](docs/HANDOFF-CODEX.md).
 
-## System Requirements
+## For developers
 
-### Minimum
-- **OS**
-  - Windows 10 64-bit
-- **GPU** with support for Direct3D 12
+- `mod/`: the mod, an `xinput1_4.dll` proxy loaded by the runner (`mod/build.cmd`, clang-cl), and the
+  launcher (`mod/launcher`). `mod/package.cmd` makes the local test package.
+- `tools/`: test copies on a hidden desktop, muted, with their own ports and saves (`tools/xrun.py`,
+  `tools/pair.py`), live tests, and memory tests (`tools/test_coop_memory.py`).
+- `docs/`: reverse-engineering notes (`RE-*.md`) and test reports.
+- `src/`, `CMakeLists.txt`: an earlier attempt on [XboxXBE-Recomp](https://github.com/TGP482/XboxXBE-Recomp).
 
-## Building
+## License
 
-### 1. Clone the Repository
-Clone this repository using [Git](https://git-scm.com/).
-
-### 2. Add the Required Game Files
-Place your extracted game data files in the `assets` folder. `default.xbe` must be there, with the game's folders beside it.
-
-### 3. Install Dependencies
-Install Visual Studio 2022 with **Desktop development with C++**, **C++ Clang tools for Windows** and **C++ CMake tools for Windows** (`build.bat` offers to add the last two).
-
-### 4. Build the Project
-Run `build.bat`. The first build recompiles the game and takes a while. The exe is written to `out\build\release`.
-
-## Credits
-
-- [Xbox XBE Recomp](https://github.com/TGP482/XboxXBE-Recomp), the recompiler and runtime this is built on.
-- [XenonRecomp](https://github.com/hedge-dev/XenonRecomp) for the overridable function layout and instruction hooks.
-- [Zydis](https://github.com/zyantific/zydis) for decoding x86 instructions, [toml++](https://github.com/marzer/tomlplusplus) for the configs, [Dear ImGui](https://github.com/ocornut/imgui) for the settings overlay and [SDL](https://github.com/libsdl-org/SDL) for the window, input and controllers.
+[MIT](LICENSE). Third-party code in `mod/third_party` keeps its own license.
