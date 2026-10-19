@@ -30,6 +30,7 @@ constexpr uint32_t setup=0x100000,next_setup=0x101000,career=0x102000,data=0x103
 constexpr uint32_t holder=0x105000,race=0x106000,machine=0x108000,players=0x109000;
 constexpr uint32_t local=race+0x98,remote=local+0xB8;
 void Fixture() {
+    _putenv_s("MC3COOP_FINISH_GATE", "0"); // legacy tests explicitly exercise the opt-out path
     std::fill(ram.begin(),ram.end(),0);
     mod::car::g_remote = {};
     mod::race::g_have_start=false; mod::race::g_phase=0;
@@ -85,9 +86,12 @@ void SetupAuthorityTests() {
     puts("PASS: authoritative setup mask before allocation; full filename, generation and revision guards.");
 }
 #include "ai_memory_tests.inc"
+#include "finish_gate_tests.inc"
 int main() {
     SetupAuthorityTests();
     AiMemoryTests();
+    FinishGateTests();
+    FinishTerminalRankTests();
     // the guest pad poll found in each known runner build, mapped as an image only (never run)
     struct Build { const wchar_t* path; uintptr_t rva; };
     for (const Build& b : {Build{L"D:/dev/mc3-coop-data/xrun/MC3Runner.exe", 0x305CB4},

@@ -12,6 +12,7 @@ import zipfile
 
 from ctl import Copy
 from isolated_job import IsolatedJob
+from firewall_preflight import approved_udp_program
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = Path(r'D:\dev\mc3-coop-data')
@@ -19,7 +20,7 @@ GAME = DATA / 'testgame' / 'Midnight Club 3 DUB Edition Remix'
 REAL = Path(r'D:\Jogos\xbox-xrevive\Midnight Club 3 DUB Edition Remix')
 
 
-def setup(archive):
+def setup(archive, stable=False):
     GAME.mkdir(parents=True, exist_ok=True)
     runners = sorted((p for p in REAL.glob('*.exe') if p.stat().st_size >= 20 << 20),
                      key=lambda p: p.stat().st_mtime)
@@ -42,7 +43,22 @@ def setup(archive):
             if not (pkg / entry.filename).resolve().is_relative_to(pkg.resolve()):
                 raise RuntimeError('ZIP path outside test folder')
         z.extractall(pkg)
-    exe = pkg / 'MC3Coop' / 'MC3Coop.exe'
+    directory = pkg / 'MC3Coop'
+    if stable:
+        # Reuse the executable path covered by a pre-existing firewall rule. Fresh directories are for
+        # extraction/evidence only; launching a new MC3Runner path each round provokes Windows prompts.
+        destination = ROOT / 'out' / 'launcher-smoke' / 'MC3Coop'
+        destination.mkdir(parents=True, exist_ok=True)
+        for item in directory.iterdir():
+            if not item.is_file():
+                raise RuntimeError('Unexpected directory in flat launcher package')
+            shutil.copy2(item, destination / item.name)
+        for optional in ('coop-online.toml', 'EOSSDK-Win64-Shipping.dll'):
+            if not (directory / optional).exists() and (destination / optional).is_file():
+                (destination / optional).unlink()
+        directory = destination
+        shutil.copy2(source, directory / 'MC3Runner.exe')
+    exe = directory / 'MC3Coop.exe'
     # No UAC or firewall change in the movie session. Unit tests cover the real offer code.
     (exe.parent / 'MC3Coop.ini').write_text(
         f'[launcher]\ngame={GAME}\nfirewallAsked=1\nmissingOnlineExplained=1\n', encoding='utf-16')
@@ -56,14 +72,17 @@ def main():
     parser.add_argument('--logs-only', action='store_true', help='test the packaged --logs executable without opening a game')
     args = parser.parse_args()
     port = 45809
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.bind(('127.0.0.1', port))
-    exe, source = setup(args.zip)
+    exe, source = setup(args.zip, stable=not args.logs_only)
     env = dict(os.environ, MC3COOP_GAME=str(GAME), MC3COOP_CONTROL=str(port), MC3COOP_MUTE='1',
                MC3COOP_INSTANCE='9', XRECOMP_NO_DIALOGS='1', XRECOMP_FULLSCREEN='0', XRECOMP_BORDERLESS='0',
                XRECOMP_PRESENT_MODE='immediate', XRECOMP_AUDIO_SRC_GAIN='0', SDL_AUDIODRIVER='dummy',
                SDL_AUDIO_DRIVER='dummy', XRECOMP_FPS_LIMIT='30', XRECOMP_FRAME_LIMIT='30', XRECOMP_MAX_FPS='30')
     env.pop('MC3COOP_COOP', None)
+    if not args.logs_only and not approved_udp_program(exe.parent / 'MC3Runner.exe'):
+        raise SystemExit('Teste do jogo não iniciado: o runner extraído não tem regra UDP previamente autorizada. Nenhuma permissão foi solicitada e o firewall não foi alterado.')
+    if not args.logs_only:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.bind(('127.0.0.1', port))
     evidence = {'archive': str(args.zip), 'runner_source': source.name, 'package': str(exe.parent)}
     with IsolatedJob() as job:
         if args.logs_only:

@@ -63,6 +63,11 @@ void AiMemoryTests() {
     std::memcpy(bad_progress.data()+sizeof(ai::WireHeader),&bad_car,sizeof bad_car);
     ai::Receive(bad_progress.data(),int(bad_progress.size()));ai::Tick(true,test_now);
     assert(R32(acar+0x15C)==6 && ai::g_applied==0);
+    ai::Stop();ai::Tick(false,test_now);ai::SetRace(400,0,2,true);
+    W32(machine+4,7); // partner finished first; host batch is still nonterminal
+    ai::Receive(final_packet.data(),int(final_packet.size()));ai::Tick(true,test_now);
+    assert(R32(acar+0x15C)==0x16 && ai::g_applied==1);
+    ai::Tick(true,test_now+600);assert(R32(acar+0x15C)==6); // live host still times out normally
     ai::Stop();ai::Tick(false,test_now);ai::SetRace(401,0,2,true);
     W32(machine+4,7);std::vector<std::vector<uint8_t>> terminal_packets;
     assert(ai::Snapshot(terminal_packets,test_now+100));

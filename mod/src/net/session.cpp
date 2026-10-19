@@ -45,7 +45,7 @@ constexpr uint64_t kHelloMs = 500;
 constexpr uint64_t kTimeoutMs = 5000;
 
 constexpr uint32_t kMagic = 0x4F43334D;  // "M3CO"
-constexpr uint16_t kProtocol = 3; // authoritative race setup; all copies must run the same build
+constexpr uint16_t kProtocol = 4; // terminal human ranking context; all copies must run the same build
 enum Type : uint8_t { kHello = 1, kWelcome, kState, kBye, kDiscover, kOffer, kRoster, kFull, kCar, kRaceStart, kWon, kTraffic, kFinished, kAi, kRaceSetup };
 
 #pragma pack(push, 1)

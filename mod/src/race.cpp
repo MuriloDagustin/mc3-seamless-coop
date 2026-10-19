@@ -71,7 +71,7 @@ Setup g_setup_out{}, g_setup_in{};
 uint64_t g_setup_send_at = 0;
 bool g_have_setup = false;
 uint32_t g_setup_applied_revision = 0;
-// Opt-in experiment: keep ReportRaceResult pending until the peer's terminal result is known.
+// Common two-human races keep ReportRaceResult pending until the peer result is known.
 enum class GatePhase { Off, Guarding, Waiting, Replay, Done, Blocked };
 GatePhase g_gate = GatePhase::Off;
 bool g_gate_requested = false, g_gate_resolved = false, g_gate_shared_won = false;
@@ -93,7 +93,7 @@ void BeginRace(uint32_t serial) {
     g_have_setup = false;
     g_setup_applied_revision = 0;
     const char* opt = std::getenv("MC3COOP_FINISH_GATE");
-    g_gate_requested = opt && std::strcmp(opt, "1") == 0;
+    g_gate_requested = !opt || std::strcmp(opt, "0") != 0;
     g_gate = GatePhase::Off;
     g_gate_race = 0;
     g_gate_at = g_finished_send_at = 0;
@@ -364,11 +364,25 @@ void ConfigureGate(uint32_t race, int state) {
 }
 
 // Capture before shared-win writes. Losses are as important as wins: otherwise both losing copies deadlock.
+bool ValidFinished(const Finished& finished) {
+    return finished.serial && finished.won <= 1 && finished.dnf <= 1 && finished.arrested <= 1 &&
+           !finished.reserved && !(finished.won && finished.dnf) &&
+           std::isfinite(finished.finish_time) && finished.finish_time >= 0 && finished.finish_time <= 86400.f &&
+           std::isfinite(finished.progress) && std::fabs(finished.progress) <= 1.0e9f;
+}
+
 void ObserveLocalFinish(uint32_t race, int state, uint64_t now) {
     uint32_t local = race + kEntry;
     if (!g_race_serial || g_local_finished || state < 5 || state > 10 || !G<uint8_t>(local + 4)) return;
+    Finished finished{g_race_serial, uint8_t(G<uint8_t>(local + 0x5D) != 0), uint8_t(G<uint8_t>(local + 6) != 0),
+                      uint8_t(G<uint8_t>(local + 5) != 0), 0, RF(local + 0x10), RF(local + 0x3C),
+                      int32_t(R32(local + 0x44))};
+    if (!ValidFinished(finished)) {
+        g_gate_reason = "invalid_local_terminal";
+        return;
+    }
     g_local_finished = true;
-    g_finished_out = {g_race_serial, uint8_t(G<uint8_t>(local + 0x5D) != 0), uint8_t(G<uint8_t>(local + 6) != 0)};
+    g_finished_out = finished;
     g_finished_send_at = 0;
     if (GateOwns(race) && g_gate == GatePhase::Guarding) {
         g_gate_finish_time = RF(local + 0x10);
@@ -515,6 +529,39 @@ void CompleteRemoteRacers(uint32_t race, int state) {
     }
 }
 
+bool TerminalRankContext(uint32_t race) {
+    uint32_t setup = P(kSetupCurrent), players = P(0x558814);
+    if (!Mapped(setup, 0x158) || !Mapped(players, 0x2C)) return false;
+    return g_race_serial && g_bound_race == race && P(race) == 0x46B2D8 && P(setup + 0x4C) == 2 &&
+           P(players + 0x28) == 2 && Ptr(P(players + 8)) && Ptr(P(players + 12)) &&
+           !G<uint8_t>(setup + 0x108) && P(setup + 0x154) == 0xFFFFFFFF &&
+           Mapped(race + kEntry, 2 * kEntrySize);
+}
+
+// The native rank comparator considers BOTH humans. A permanent local DNF placeholder would shift every AI
+// rank when the actual peer won. Keep the no-callback guards/count, but import the peer's genuine rank context.
+void ApplyPeerTerminal(uint32_t race) {
+    if (!g_peer_finished || g_finished_peer.serial != g_race_serial || !ValidFinished(g_finished_peer) ||
+        !TerminalRankContext(race)) return;
+    uint32_t remote = race + kEntry + kEntrySize;
+    if (!G<uint8_t>(remote + 4)) return;
+    G<uint8_t>(remote + 5) = g_finished_peer.arrested;
+    G<uint8_t>(remote + 6) = g_finished_peer.dnf;
+    G<float>(remote + 0x10) = g_finished_peer.finish_time;
+    G<float>(remote + 0x3C) = g_finished_peer.progress;
+    W32(remote + 0x44, uint32_t(g_finished_peer.score));
+    W32(remote + 0x18, 0);
+}
+
+void RestoreLocalTerminalTime(uint32_t race, int state) {
+    if (state < 7 || state > 10 || g_gate != GatePhase::Done || !GateOwns(race) || !g_local_finished ||
+        g_finished_out.serial != g_race_serial || !ValidFinished(g_finished_out) || !TerminalRankContext(race) ||
+        !G<uint8_t>(race + 0x0D) || !G<uint8_t>(race + kEntry + 4)) return;
+    // Report/statistics have already run. Restore only ranking time; never rewrite the global clock/best lap,
+    // permanent guards, win flags or counters. Recorded statistics may still include the replay's network wait.
+    G<float>(race + kEntry + 0x10) = g_finished_out.finish_time;
+}
+
 void RaceTick(bool connected) {
     uint32_t race = P(P(kRaceHolder) + 4);
     int state = RaceState();
@@ -523,8 +570,10 @@ void RaceTick(bool connected) {
     uint64_t now = GetTickCount64();
     ConfigureGate(race, state);
     CompleteRemoteRacers(race, state);
+    ApplyPeerTerminal(race);
     ObserveLocalFinish(race, state, now);
     AdvanceGate(race, state, now, connected);
+    RestoreLocalTerminalTime(race, state);
     uint32_t local = race + kEntry;
     // With remotes already completed, the native local finish can go straight from 5 to 7 inside one call.
     // Observe it in the result states too; there may never be an xinput poll in state 6.
@@ -618,11 +667,12 @@ void OnPartnerWon(uint32_t serial, int32_t prize) {
 
 void OnPartnerFinished(const Finished& finished) {
     std::lock_guard lock(g_lock);
-    if (!finished.serial || finished.serial != g_race_serial || finished.won > 1 || finished.dnf > 1 ||
-        (finished.won && finished.dnf) || g_peer_finished || (g_gate_resolved && !g_gate_shared_won)) return;
+    if (!ValidFinished(finished) || finished.serial != g_race_serial || g_peer_finished) return;
     g_finished_peer = finished;
     g_peer_finished = true;
-    if (finished.won) g_partner_won = true;
+    // A timeout's local credit decision stays final, but the real peer still belongs in native ranking.
+    // Late metadata must not rearm a completed race or revive its shared prize/victory.
+    if (finished.won && !(g_gate_resolved && !g_gate_shared_won)) g_partner_won = true;
     Log("race: peer terminal serial %u won=%u dnf=%u", finished.serial, finished.won, finished.dnf);
 }
 

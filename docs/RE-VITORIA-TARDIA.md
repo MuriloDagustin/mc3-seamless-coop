@@ -1,6 +1,6 @@
 # Vitória tardia sem HUD remoto
 
-Análise estática em 18/10/2026. Nenhum jogo foi iniciado por esta análise. Endereços do Xbox, somados à base de memória do runner. **A receita abaixo é PALPITE testável, não uma correção já validada.**
+Análise estática em 18/10/2026. Nenhum jogo foi iniciado por esta análise. Endereços do Xbox, somados à base de memória do runner. **A receita original abaixo era PALPITE. A implementação e a validação parcial posterior estão registradas na atualização ao final.**
 
 ## Resultado
 
@@ -108,3 +108,11 @@ Para cada `config = record+34+i*3`, se `s8(config[0])>=0 && s8(config[1])<=-2`, 
 Patch mínimo para o protocolo atual: invalidar **cada tripleto desse caso para FF FF FF**, sem liberar nenhum slot local; se algum foi invalidado, `record+27=0`, para o criador local regenerar as configs (`0x2774CE..0x27751B`). Alternativa que preserva os mesmos adversários: transportar strings de nomes, reservar slots livres locais e reescreverFE-k. Isso exige expansão deStart e gerenciamento de recursos; não manter bytes com significado de propriedade do pool do host.
 
 Validar também `NumOpponents+26<=8`, city/raceIdx contra a base de dados local e floats finitos antes de publicar. Reusar um registro já existente no parceiro mantém seus ponteiros/pool locais: não substituir seus bytes pelo payload do host. A regeneração das configs pode alterar adversários em relação ao host; isso precisa ser resolvido por manifesto/nomes para a futura sincronização da IA, mas evita corromper nomes/saves agora.
+
+## Implementação e validação posterior (18/10/2026)
+
+Implementado em race.cpp com guardas restritas a46B2D8/dois humanos; ativação padrão, opt-out MC3COOP_FINISH_GATE=0. Ao vivo, parceiro primeiro, resultado atrasado2s, host com perda induzida por arrested+5: espera6→replaylocal→7; contador1→2; vitória e+800 em ambos uma vez, melhor volta preservada. Derrota dos dois também passou. Ver TESTE-ISOLADO-2026-10-18.md para evidências e limites.
+
+A comparação nativa de posição em1CF440 usa os DOIS humanos, inclusive arrested+5, DNF+6, finished+4, tempo+10, laps+18, métrica+3C e score+44. Copiar apenas AI+14 não basta quando local5º/remoto1º diferem. Protocolo4 amplia Finished para20bytes, sem ponteiros: serial, won/dnf/arrested/reserved, finish_time/progress/score. O hook importa apenas os campos de comparação do remoto já protegido e mantém finished/CP/counter/HUD. Após o Report local, restaura o tempo original somente para classificação, sem mexer em melhor volta, relógio global, prêmio ou guardas. As IAs [2,3,4] ficaram iguais mesmo com humanos5º/1º.
+
+Timeout15s é uma decisão definitiva de crédito local. Metadata terminal tardia ainda pode atualizar classificação, mas não liga partner_won, não concede prêmio, não rearma e não reabre Report. Testado em RAM simulada; ensaio ao vivo com20s interrompido por avisos de firewall. Persistência/reabertura do save do gate, perda natural em2ºlugar e outros modos continuam pendentes. A rotina de chegada/HUD local pode executar duas vezes; estatísticas de tempo total podem incluir a espera. Não anunciar o caminho como universalmente validado.

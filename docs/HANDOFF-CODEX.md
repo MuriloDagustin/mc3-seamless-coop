@@ -2,6 +2,10 @@
 
 Responda em português. Trabalhe em `C:\dev\mc3-coop` (branch `coop-noite`). Commits locais podem ser feitos ao fim de cada item testado. **Nunca faça push.**
 
+## Interrupção por avisos de firewall — atualização Codex
+
+O usuário relatou avisos repetidos de firewall durante os testes. O Codex encerrou somente suas próprias cópias e suspendeu testes ao vivo. **Continuar apenas offline enquanto não houver caminho de teste silencioso comprovado. Não abrir jogo, pedir UAC nem criar/alterar regras de firewall nesta etapa.** A causa identificada na infraestrutura foi copiar MC3Runner.exe para um caminho novo por rodada: regras do Windows são associadas ao caminho. Não repetir esse padrão. Os harnesses passam a verificar regras já existentes, somente leitura, e recusam iniciar o jogo quando não há autorização prévia adequada; não contornam a decisão do Windows. Produto continua oferecendo firewall uma vez ao usuário final conforme a tarefa original; testes não devem provocar essa oferta.
+
 ## Regras fixas (do usuário, não negociáveis)
 - Nunca feche, mate ou mexa no jogo dele nem no `xrevive.exe`. Nunca mate processo pelo nome. Só feche cópias de teste que você abriu: use o arquivo `D:\dev\mc3-coop-data\xrun\stop-tests` ou confira a linha de comando, que precisa conter `mc3-coop-data`.
 - Testes sempre mudos, num desktop invisível (`tools\xrun.py` / `tools\pair.py` já fazem isso). Não mande teclas do Windows e não roube foco.
@@ -9,7 +13,7 @@ Responda em português. Trabalhe em `C:\dev\mc3-coop` (branch `coop-noite`). Com
 - Nada de arquivos do jogo nem do `coop-online.toml` (credenciais) no git. O zip tem credenciais: uso local, não publicar.
 - Não diga que funciona sem ter testado. Registre o que testou e como em `docs/TESTE-ISOLADO-2026-10-18.md`.
 
-## Estado atual (último commit `a10a532` + mudanças não commitadas, ver abaixo)
+## Estado recebido de Claude (histórico; base já consolidada em a0a472a)
 Testado ao vivo com 2 cópias (host 45703, parceiro 45704) no **build novo do xrevive** (`0x6AD5001B`):
 - carro do parceiro no mundo do host, sem tela dividida; chegada sem travar;
 - largada comum (o parceiro larga 0,3 s depois do host);
@@ -23,7 +27,7 @@ Mudanças desta sessão que **ainda não estão em commit** (compilam; o pacote 
 
 Faça o commit dessas mudanças primeiro.
 
-## Como testar (receita que funciona)
+## Receita histórica de teste ao vivo (suspensa após os avisos de firewall)
 ```
 cmd /c mod\build.cmd                      (DLL do mod; mod\package.cmd gera out\MC3Coop-test.zip)
 python tools\pair.py                      (2 cópias até o cruise, ~2,5 min; reinicia as anteriores)
@@ -56,11 +60,13 @@ python tools\ctl.py <porta> state|shot <nome>|players|peek <addr> [n]
   - Confira que o lançador acha o runner novo, que o mod carrega e que o F10 aparece.
 - Atualizar `mod/README-JOGAR.txt`: o estado da IA e o nome novo do runner.
 
-### 3. Vitória tardia (vitória do parceiro chegando depois do resultado local)
+### 3. Vitória tardia (implementada; vitória2s/perdas locais passaram, timeout ao vivo pendente)
+- **Atualização Codex:** proteção padrão para46B2D8/dois humanos, Finished20bytes/protocolo4, contexto humano real para ranks. Win2s e derrota dos dois passaram ao vivo; ramo15s/metadata posterior passou só em RAM simulada. Não retomar jogo enquanto houver risco de avisos de firewall. Ver relatório.
 - O projeto está em `docs/RE-VITORIA-TARDIA.md`: adiar o primeiro `ReportRaceResult` e mandar também resultado de derrota.
 - Implementar só para o circuito comum (vtable `0x46B2D8`) e testar com `race_finish_test.py`, fazendo o parceiro chegar primeiro no próprio mundo.
 
-### 4. Pendências menores
+### 4. Pendências menores (análise registrada; mudanças de runtime ainda não implementadas)
+- **Análise:** docs/RE-PENDENCIAS-MENORES.md explica máscara dirty do CarCfg, reconstrução de modelo ainda sem pedido de dados comprovado e candidato C4 para trailers. Não remover guardas nem anunciar essas propostas como implementadas.
 - Caminhões de tráfego (`+0xEC` reboque) ficam de fora: escondê-los ou sincronizá-los.
 - Troca de carro do parceiro sem recarregar o mundo.
 - Outras modalidades de corrida (eliminação, pontos, perseguição).

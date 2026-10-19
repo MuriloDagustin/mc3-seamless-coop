@@ -1,6 +1,6 @@
 # Teste ao vivo isolado — 18/10/2026
 
-Autorizado pelo usuário nesta sessão, com áudio mutado e fora do desktop em uso. Nenhuma tecla do Windows foi enviada; apenas comandos UDP do controle interno do mod. Nenhum commit/push.
+Autorizado pelo usuário nesta sessão, com áudio mutado e fora do desktop em uso. Nenhuma tecla do Windows foi enviada; apenas comandos UDP do controle interno do mod. Os commits locais posteriores foram autorizados pelo handoff; nenhum push foi feito.
 
 ## Isolamento
 
@@ -71,3 +71,39 @@ Limites: modo experimental, corridas comuns com layout compatível; outras modal
 - O harness agora usa pasta extraída única, desktop invisível, processo suspenso atribuído a Job Object antes de iniciar (encerramento somente dessa árvore), nenhuma limpeza por nome/linha de comando e nenhum envio de tecla Windows. Firewall first-run fica pré-marcado apenas no INI descartável. O novo comando interno `panel toggle` usa o painel real sem mensagens de teclado.
 
 **Pendente do item2:** carga do mod e captura do painel através do próprio lançador do pacote não puderam ser verificadas com o xrevive aberto. Não foi criado bypass e nenhum processo alheio foi fechado. Repetir o smoke completo quando o usuário fechar manualmente xrevive e runners. O pacote permanece experimental; este bloqueio não impede os testes separados de corrida do item3.
+
+## Handoff, item 3 — vitória tardia e contexto final dos humanos
+
+**Ao vivo, antes da suspensão dos testes:** duas cópias próprias, mudas e no desktop invisível; runner0x6AD5001B. Sem chamadas a funções guest. Circuito city0/race30, vtable46B2D8. O teste acelerou checkpoints por teleporte e induziu derrota local pelo byte arrested+5, preservando DNF/participação. Não representa uma corrida natural em2ºlugar.
+
+- A proteção de chegada está ligada por padrão somente no contexto suportado (exatamente dois humanos, uma câmera/HUD local, rede nativa desligada e sem timer); MC3COOP_FINISH_GATE=0 mantém opt-out técnico.
+- `tools/result_delay_proxy.py` mantém poses/handshake imediatos e atrasa apenas Won/Finished do parceiro para o host. O proxy não inicia nem fecha executáveis. Teste loopback sintético passou.
+- Parceiro chegou primeiro e venceu. Host chegou com derrota induzida e permaneceu no estado6, contador humano1, guardas de resultado/pagamento ainda0. O resultado do parceiro chegou2s depois; a segunda chegada exclusivamente LOCAL levou o contador1→2 e executou o resultado permanente uma vez. Remoto permaneceu sem HUD e protegido contra callback.
+- Rodada final de vitória: NumberOfWonRaces1→2 nas duas cópias; dinheiro host6500→7300 e parceiro6140→6940, +800 cada. Host teve prêmio nativo zero e complemento de800. Repetições de pacotes não mudaram esses totais. Melhor volta host0,9022/parceiro1,2101 permaneceu igual após o replay (tempos artificiais do teleporte).
+- A ordem inversa de chegada revelou dois defeitos, corrigidos: liberar IA enquanto o parceiro já mostrava resultados e o host ainda corria; e deixar o remoto como DNF definitivo, deslocando o ranking nativo. Agora a IA continua seguindo snapshots ativos nos resultados. Finished tem20bytes (protocolo4), com arrested, tempo original, métrica e score; os dois mundos recebem os mesmos dados reais dos humanos, trocando apenas a vaga local/remota. Não importa ponteiros nem chama chegada remota. O tempo local usado na classificação é restaurado somente depois do Report nativo; estatísticas já gravadas ainda podem incluir a espera.
+- `python tools/late_victory_test.py --case win`: PASS. Humanos terminaram em5º/1º, mas as três IAs ficaram [2,3,4] nos dois mundos em três amostras. Parceiro permaneceu ai=experimental durante a espera. Evidência privada: out/live-isolated/late-tests/win-1792354062085606700.
+- `python tools/late_victory_test.py --case loss`: PASS. Derrota induzida nos dois, sem deadlock, contador2 em cada cópia, vitórias e dinheiro inalterados. IAs [1,2,3] iguais nas três amostras. Evidência: out/live-isolated/late-tests/loss-1792354241854222300.
+- Timeout: após15s mantém o resultado local. Um terminal posterior ainda pode atualizar dados de classificação, mas não reabre crédito/pagamento nem concede vitória. Esse ramo e o fallback de replay foram verificados SOMENTE em RAM simulada. A tentativa ao vivo com20s foi interrompida antes da corrida por causa dos avisos de firewall; não é um teste aprovado.
+
+`python tools/test_coop_memory.py` passou com as fontes finais: vitória2s depois, perdas, retransmissão500ms, timeout15s, desconexão, duplicatas/serial antigo, máscaras de1/7/32/64CP, guardas permanentes, melhor volta, contexto dos dois humanos invertido, pacote inválido, metadata após timeout sem crédito e resultado nativo idempotente. Helpers de evento nativo no harness são simulação, não prova da callback real.
+
+**Ainda pendente deste item:** timeout/desconexão ao vivo, vitória natural de quem chegou em colocação inferior, persistência/reabertura dos saves do novo gate e outras modalidades. Não há promessa de vitória após o prazo nem de tempo de corrida exato sem a espera.
+
+## Interrupção: avisos de firewall e correção dos harnesses
+
+O usuário relatou avisos repetidos do Windows. As rodadas usavam um caminho novo de MC3Runner.exe a cada execução, perdendo a associação das permissões existentes. Os testes ao vivo foram suspensos e somente os processos próprios foram encerrados. O último controlador estava no boot, que ainda não consultava seu stop-file: os dois processos próprios34560/30484 foram encerrados por handles após conferir seus caminhos exatos. O controlador fechou seu Job Object. xrevive15016 e runners preexistentes16980/18624 permaneceram intactos. Codex não executou netsh nem alterou regras de firewall.
+
+- Os novos tools/isolated_pair.py e tools/test_launcher.py usam caminho fixo para o runner. Saves/evidências continuam separados por rodada. O stop-file também é consultado durante boot e esperas.
+- `firewall_preflight.py` consulta somente Get-NetFirewall* em ActiveStore, PowerShell oculto/não interativo. Sem regra de entrada UDP/Any já habilitada para o caminho exato, perfil/portas/endereçosAny, ou em caso de erro/bloqueio explícito, recusa iniciar. Não cria regra, não pede UAC e não oferece aprovação.
+- `python tools/test_firewall_preflight.py`:9 testes mockados PASS. `python tools/test_launch_guards.py`:2 testes PASS, provando recusa antes de criar Job Object/processo; o teste do par também prova o mesmo caminho de EXE em duas rodadas. Nenhum jogo, janela, socket ou consulta real de firewall foi aberto nesses testes.
+- `python tools/test_launcher_unit.py`: PASS novamente. Processos de jogo, diálogos e netsh são interceptados; apenas ZIPs locais de logs são criados pelo PowerShell real. Nenhum runner foi iniciado.
+
+Os novos guardas não foram usados para voltar a executar o jogo nesta etapa. O smoke completo do pacote continua pendente. Nenhum aviso do Windows foi respondido automaticamente. O trabalho continuou offline.
+
+## Fechamento offline
+
+`mod/package.cmd` compilou e gerou novamente out/MC3Coop-test.zip com as fontes finais (protocolo4 e README atualizado). Verificação por zipfile: CRC íntegro; MC3Coop.exe e xinput1_4.dll dentro do ZIP idênticos byte a byte aos compilados; sem default.xbe/MC3Runner.exe. O ZIP contém configuração privada, permanece ignorado pelo git e não foi publicado. Manifesto/hash privado em out/codex/package-final-check.json.
+
+Consulta real SOMENTE LEITURA de firewall para out/live-isolated/MC3Runner.exe executou sem elevação e recusou o caminho por não encontrar a regra ampla exigida pelo preflight. Nenhum runner foi iniciado. A importação de late_victory_test também foi conferida com sockets/parser bloqueados: não tem efeitos de rede ou execução ao importar.
+
+O item4 permanece na análise estática em RE-PENDENCIAS-MENORES.md. Pintura/peças exigem marcar dirty sem reintroduzir a máscara a cada frame; reconstrução de modelo e reboques ainda não têm implementação validada. Não foram feitas mudanças especulativas de runtime nesses itens. Os scripts históricos pair.py/xrun.py não devem ser usados durante a suspensão dos testes ao vivo; não possuem os novos guardas de firewall.

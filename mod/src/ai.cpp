@@ -201,7 +201,8 @@ void Tick(bool partner,uint64_t now) {
     if(!partner || !g_serial || !g_ready.mask) { Release();g_reason="off";return; }
     // Retain the host's final snapshot while this player is still racing; a later race or disconnect releases it.
     if(now<g_ready.at || (!(g_ready.head.reserved&1) && now-g_ready.at>=kStaleMs)) { Release();g_reason="stale";return; }
-    if(!ReadPool(p,(g_ready.head.reserved&1)!=0)) { Release();g_reason="waiting_pool";return; }
+    // A partner may finish before the host; keep following live host snapshots in its result screen too.
+    if(!ReadPool(p,true)) { Release();g_reason="waiting_pool";return; }
     if(p.layout!=g_ready.head.layout || p.count!=g_ready.head.count) { Release();g_reason="layout_mismatch";return; }
     if(g_sync_progress && (Read(p.race+0x24)==0 || Read(p.race+0x24)>128)) { Release();g_reason="unsupported_checkpoints";return; }
     for(int i=0;i<p.count;i++) {

@@ -24,6 +24,9 @@ struct Start {
 struct Finished {
     uint32_t serial;
     uint8_t won, dnf;  // terminal result BEFORE any shared-win override or payment
+    uint8_t arrested = 0, reserved = 0;
+    float finish_time = 0, progress = 0;
+    int32_t score = 0;
 };
 struct Setup {
     uint32_t serial, revision;

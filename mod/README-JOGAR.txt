@@ -64,10 +64,12 @@ ESTADO DESTA VERSÃO
 - Pacote experimental. Os testes abaixo usaram duas cópias na mesma máquina, em corridas comuns.
 - A largada do host levou o parceiro automaticamente à mesma corrida de carreira.
 - A vaga remota não tem HUD nem câmera. Nas corridas convencionais ela é concluída internamente
-  para não travar sua chegada; pode aparecer como concluída/desistente na classificação local.
+  para não travar sua chegada; pode aparecer como concluída/desistente até receber o resultado real.
 - Tela inteira, chegadas sem travar e retorno à ronda passaram nos circuitos testados.
 - Vitória recebida antes da chegada local e prêmio para os dois passaram em um circuito.
-  O complemento de um prêmio de colocação inferior ainda precisa de teste específico.
+- Na corrida comum com dois jogadores, quem chega antes pode aguardar até 15 segundos pelo resultado
+  do parceiro. A vitória recebida com 2 segundos de atraso passou no teste local, incluindo complemento
+  de prêmio zero para $ 800. Uma colocação inferior natural ainda precisa de teste específico.
 - Foram sincronizados 48 carros de tráfego, inclusive após carregar uma corrida e voltar à ronda.
   Colisões após grandes deslocamentos, carros acidentados e caminhões ainda precisam de validação.
 - A IA passou com cinco adversários: posições acompanharam o host e as cinco colocações finais
@@ -76,8 +78,11 @@ ESTADO DESTA VERSÃO
 - Perda de pacotes e latência de internet ainda não foram validadas; a IA pode voltar temporariamente
   ao controle local se deixar de receber o estado do host durante a corrida.
 - Corridas de eliminação, pontos, perseguição e outras modalidades precisam de validação específica.
-- Uma vitória que chegar pela rede depois de seu resultado local já ter sido processado ainda precisa
-  de tratamento adicional; não há garantia de crédito retroativo nesta versão.
+- Se o resultado do parceiro não chegar dentro dos 15 segundos, vale seu resultado local.
+  Uma vitória recebida depois dessa decisão não concede crédito retroativo. O timeout foi verificado
+  em memória simulada; o teste ao vivo desse caso ainda está pendente.
+- A espera usa uma segunda passagem local pela chegada. Pode repetir o aviso de chegada e incluir
+  a espera no tempo registrado da corrida; não foi observado novo recorde falso de melhor volta.
 - Troca do carro remoto ainda exige recarregar o mundo (garagem/menu).
 - Salas EOS entre dois PCs ainda precisam do teste com o amigo; criar sala localmente não prova a conexão.
 
