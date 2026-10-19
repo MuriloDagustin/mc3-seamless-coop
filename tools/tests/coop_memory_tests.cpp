@@ -94,15 +94,17 @@ int main() {
     AiMemoryTests();
     FinishGateTests();
     FinishTerminalRankTests();
-    // the guest pad poll found in each known runner build, mapped as an image only (never run)
+    // the guest pad poll found in each known runner build, mapped as an image only (never run); the staged test
+    // runner follows xrevive's updates (0x305CB4, then 0x306984): any one `call [rip+iat]` site there
     struct Build { const wchar_t* path; uintptr_t rva; };
-    for (const Build& b : {Build{L"D:/dev/mc3-coop-data/xrun/MC3Runner.exe", 0x305CB4},
+    for (const Build& b : {Build{L"D:/dev/mc3-coop-data/xrun/MC3Runner.exe", 0},
                            Build{L"D:/dev/mc3-coop-data/testgame/Midnight Club 3 DUB Edition Remix/"
                                  L".xrevive-8c22479443f74b1c5a543f0c5b0f4a7966472812e1caf0f3bb0729d8c3009221.exe", 0x4E35C4}}) {
         HMODULE m = LoadLibraryExW(b.path, nullptr, DONT_RESOLVE_DLL_REFERENCES);
         if (!m) continue;  // that build is not on this PC
         uintptr_t r = mod::game::FindGuestInputReturn(reinterpret_cast<const uint8_t*>(m));
-        assert(r == reinterpret_cast<uintptr_t>(m) + b.rva);
+        if (b.rva) assert(r == reinterpret_cast<uintptr_t>(m) + b.rva);
+        else assert(r && reinterpret_cast<const uint8_t*>(r)[-6] == 0xFF && reinterpret_cast<const uint8_t*>(r)[-5] == 0x15);
         FreeLibrary(m);
     }
     Fixture();

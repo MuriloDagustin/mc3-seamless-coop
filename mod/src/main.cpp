@@ -58,13 +58,33 @@ void Log(const char* fmt, ...) {
     std::fflush(g_log);
 }
 
+// VirtualQuery measures the whole run of alike pages around the address, a slow walk in the 4 GB guest image: the
+// hundreds of checks of a game tick with a partner took 25 ms (7 fps, both PCs). The runs it reports are kept a
+// moment per thread: the same tick now costs under 1 ms.
 bool Mapped(uint32_t va, uint32_t bytes) {
     if (!g_base || !bytes) return false;
-    for (uint64_t at = va & ~0xFFFull; at < uint64_t(va) + bytes; at += 0x1000) {
+    struct Run { uint64_t begin, end; };
+    thread_local Run runs[16];
+    thread_local int count = 0, next = 0;
+    thread_local uint64_t since = 0;
+    uint64_t now = GetTickCount64();
+    if (now - since > 20) count = 0, next = 0, since = now;
+    uint64_t end = uint64_t(va) + bytes;
+    for (uint64_t at = va & ~0xFFFull; at < end;) {
+        int i = 0;
+        while (i < count && !(runs[i].begin <= at && at < runs[i].end)) i++;
+        if (i < count) {
+            at = runs[i].end;
+            continue;
+        }
         MEMORY_BASIC_INFORMATION mbi;
         if (!VirtualQuery(g_base + at, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT ||
             (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
             return false;
+        Run r{uint64_t(static_cast<uint8_t*>(mbi.BaseAddress) - g_base), 0};
+        r.end = r.begin + mbi.RegionSize;
+        runs[count < 16 ? count++ : next++ % 16] = r;
+        at = r.end;
     }
     return true;
 }
