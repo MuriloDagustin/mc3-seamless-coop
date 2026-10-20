@@ -17,6 +17,7 @@
 #include <mutex>
 
 #include "mod.h"
+#include "native.h"
 #include "race.h"
 
 namespace mod::car {
@@ -111,6 +112,7 @@ struct Remote {
     Loaded binding{};
     std::array<uint8_t,kCarCfgBytes> loaded_cfg{};
     bool known_model = false, model_pending = false;
+    uint64_t model_since = 0, swap_retry = 0;
     struct Installed { uint32_t target=0, vtable=0; uint64_t revision=0, binding=0; };
     std::array<Installed,3> installed{}; // current setup, next setup, loaded vehicle
     struct Sample {
@@ -320,6 +322,86 @@ bool LocalCarCfg(uint8_t out[kCarCfgBytes]) {
     return ValidConfig(out);
 }
 
+bool GarageCfg(int index, uint8_t out[kCarCfgBytes]) {
+    if (!Ptr(kGarageCount) || index < 0 || index >= 30) return false;
+    uint8_t count = G<uint8_t>(kGarageCount);
+    if (index >= count) return false;
+    uint32_t cfg = kGarage + uint32_t(index) * kCarCfgBytes;
+    if (!Mapped(cfg, kCarCfgBytes)) return false;
+    std::memcpy(out, HostPtr(cfg), kCarCfgBytes);
+    return ValidConfig(out);
+}
+
+bool SetupCfg(int slot, uint8_t out[kCarCfgBytes]) {
+    if (slot < 0 || slot > 7) return false;
+    uint32_t setup = Ptr(kSetupNext) ? R32(kSetupNext) : 0;
+    if (!setup || !Mapped(setup, kSlot + uint32_t(slot) * kSlotSize + kSlotSize)) return false;
+    uint32_t cfg = R32(setup + kSlot + uint32_t(slot) * kSlotSize + kSlotCar);
+    if (!ConfigPtr(cfg)) return false;
+    std::memcpy(out, HostPtr(cfg), kCarCfgBytes);
+    return ValidConfig(out);
+}
+
+bool AdoptSetupAsLocal(int slot) {
+    uint8_t cfg[kCarCfgBytes];
+    if (!SetupCfg(slot, cfg) || !Ptr(kGarageCount)) return false;
+    uint8_t count = G<uint8_t>(kGarageCount), selected = G<uint8_t>(kGarageSelected);
+    if (!count || selected >= 30) return false;
+    uint32_t dst = kGarage + uint32_t(selected) * kCarCfgBytes;
+    if (!Mapped(dst, kCarCfgBytes)) return false;
+    uint32_t vtable = R32(dst), dirty = R32(dst + 8);
+    std::memcpy(HostPtr(dst + 0x0C), cfg + 0x0C, kCarCfgBytes - 0x0C);
+    W32(dst, vtable);
+    W32(dst + 8, dirty);
+    return true;
+}
+
+std::string List() {
+    std::string out;
+    char line[120];
+    int count = Ptr(kGarageCount) ? int(G<uint8_t>(kGarageCount)) : 0;
+    int selected = Ptr(kGarageSelected) ? int(G<uint8_t>(kGarageSelected)) : -1;
+    std::snprintf(line, sizeof line, "garage count=%d selected=%d\n", count, selected);
+    out += line;
+    for (int i = 0; i < count && i < 30; i++) {
+        uint32_t cfg = kGarage + uint32_t(i) * kCarCfgBytes;
+        if (!Mapped(cfg, kCarCfgBytes) || !ValidType(static_cast<const uint8_t*>(HostPtr(cfg)))) continue;
+        std::snprintf(line, sizeof line, " %d %c %.22s\n", i, i == selected ? '*' : ' ',
+                      reinterpret_cast<const char*>(HostPtr(cfg + kTypeName)));
+        out += line;
+    }
+    for (uint32_t global : {kSetupCurrent, kSetupNext}) {
+        uint32_t setup = Ptr(global) ? R32(global) : 0;
+        if (!setup || !Mapped(setup, kSlot + 4 * kSlotSize)) continue;
+        std::snprintf(line, sizeof line, "%s slot cars:", global == kSetupCurrent ? "current" : "next");
+        out += line;
+        for (int i = 0; i < 4; i++) {
+            uint32_t cfg = R32(setup + kSlot + uint32_t(i) * kSlotSize + kSlotCar);
+            out += ' ';
+            if (ConfigPtr(cfg) && ValidType(static_cast<const uint8_t*>(HostPtr(cfg))))
+                out += std::string(reinterpret_cast<const char*>(HostPtr(cfg + kTypeName)), strnlen(
+                    reinterpret_cast<const char*>(HostPtr(cfg + kTypeName)), kTypeNameBytes));
+            else
+                out += '-';
+        }
+        out += '\n';
+    }
+    uint32_t manager = Read(kPlayerManager), players = manager ? Read(manager + 0x28) : 0;
+    out += "live slot cars:";
+    for (uint32_t i = 0; i < players && i < 8; i++) {
+        uint32_t player = Read(manager + 8 + i * 4), vehicle = player ? Read(player + 0x14) : 0;
+        uint32_t cfg = vehicle && Mapped(vehicle, 0x6C) ? Read(vehicle + 0x64) : 0;
+        out += ' ';
+        if (ConfigPtr(cfg) && ValidType(static_cast<const uint8_t*>(HostPtr(cfg))))
+            out += std::string(reinterpret_cast<const char*>(HostPtr(cfg + kTypeName)), strnlen(
+                reinterpret_cast<const char*>(HostPtr(cfg + kTypeName)), kTypeNameBytes));
+        else
+            out += '-';
+    }
+    out += '\n';
+    return out;
+}
+
 void Place(const Pose& p) {
     Chain c;
     if (!PlayerChain(0, c)) return;
@@ -343,6 +425,7 @@ static void StoreConfig(int slot, const uint8_t cfg[kCarCfgBytes], bool ordered,
     if(changed) {
         std::memcpy(r.cfg.data(), cfg, kCarCfgBytes);
         std::memset(r.cfg.data()+8,0,4); // foreign dirty bits are consumed on the other PC
+        r.model_since = GetTickCount64();
         if(!++r.revision)++r.revision;
     }
     r.have_cfg = r.active = true;
@@ -445,6 +528,25 @@ void Tick(uint64_t) {
         Chain c;
         if (!PlayerChain(i, c)) continue;
         Apply(c, Blend(r, now));
+    }
+    // Remote model change: build/publish a candidate vehicle in the game thread, preserving player/race. Only the
+    // experimental swap flag reaches this; a refusal keeps the old car and retries after a cooldown.
+    if (native::SwapEnabled()) {
+        for (int i = 1; i < 8; i++) {
+            Remote& r = g_remote[i];
+            if (!r.active || !r.have_cfg || !r.model_pending || !r.binding.vehicle) continue;
+            if (now - r.model_since < 1500 || now < r.swap_retry) continue;
+            if (native::SwapRemote(i)) {
+                r.model_pending = false;
+                r.known_model = true;
+                r.loaded_cfg = r.cfg;
+                r.installed = {};
+                r.swap_retry = now + 5000;
+                Log("car: slot %d native model swap committed", i);
+            } else {
+                r.swap_retry = now + 5000;
+            }
+        }
     }
 }
 

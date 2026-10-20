@@ -14,6 +14,7 @@ static uint64_t test_now = 1000;
 static ULONGLONG TestClock() { return test_now; }
 #define GetTickCount64 TestClock
 #include "../../mod/src/car.cpp"
+#include "../../mod/src/native.cpp"
 #include "../../mod/src/race.cpp"
 #include "../../mod/src/traffic.cpp"
 #include "../../mod/src/ai.cpp"
@@ -24,6 +25,7 @@ namespace mod {
 uint8_t* g_base = ram.data();
 bool Mapped(uint32_t va, uint32_t bytes) { return va >= 0x10000 && va < ram.size() && bytes <= ram.size() - va; }
 void Log(const char*, ...) {}
+std::string Env(const char*) { return {}; }
 }
 using mod::W32; using mod::R32; using mod::G;
 constexpr uint32_t setup=0x100000,next_setup=0x101000,career=0x102000,data=0x103000,rewards=0x104000;

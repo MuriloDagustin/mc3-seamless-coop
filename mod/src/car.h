@@ -27,6 +27,10 @@ bool Local(Pose& out);     // the local player's car now
 void Place(const Pose& p); // the local car moved there, stopped ("take me to my partner")
 
 bool LocalCarCfg(uint8_t out[kCarCfgBytes]);  // the career garage's selected car: what the partners will see
+bool GarageCfg(int index, uint8_t out[kCarCfgBytes]);  // a garage CarCfg by index (test/diagnostic)
+bool SetupCfg(int slot, uint8_t out[kCarCfgBytes]);     // NEXT setup slot CarCfg (test/diagnostic)
+bool AdoptSetupAsLocal(int slot);  // test only: make the selected garage slot send this setup car
+std::string List();        // garage and setup TypeNames, diagnostics only
 
 // partners by race-setup slot (1..7): their own campaign car, then their poses with the time they were sent
 void SetPartnerCar(int slot, const uint8_t cfg[kCarCfgBytes]);

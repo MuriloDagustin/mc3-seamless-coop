@@ -135,3 +135,65 @@ Pendências da prioridade1: espera no resultado/decisão pós-corrida, próxima 
 Implementação e limites em `RE-HOST-FLUXO-IMPLEMENTACAO.md`. `python tools/test_coop_memory.py` passou com fluxo completo simulado de espera, Quit/Sim, Next, cursor incompatível, perda/reordenação de decisões e histórico de setups. Log: `out/test-host-flow-memory.log`.
 
 `cmd /c mod\build.cmd` passou e produziu `out/mod/xinput1_4.dll`; log `out/build-host-after.log`. Avisos existentes de ImGui. Nenhum executável do jogo/launcher, rede de teste, janela ou firewall foi aberto. Isso não comprova timing dos menus, carga nem prêmio em série no jogo. Sem novo ZIP e sem push.
+
+## Investigação posterior: troca integral do carro
+
+Prioridade solicitada após9663375. Apenas análise estática: xref de wrappers/factory, tabela de métodos no XBE e pacote nativo de configuração44. Ver `RE-TROCA-CARRO-REDE.md` e `PLANO-TROCA-CARRO-NATIVA.md`. Asserções locais sobre o índice confirmaram272010→271E20, consumidores103A50/103C50 no updateFFD90 e ausência de chamada direta à fábrica nesse update; o único chamador direto indexado de2CBC40 continua o fragmento2C004C do construtor do jogador. Isso delimita o grafo de chamadas diretas, não prova inexistência de outro mecanismo.
+
+Não houve modificação de runtime, nova compilação, teste em RAM ou ensaio ao vivo nesta investigação. A troca completa permanece não implementada. Nenhum jogo/launcher, conexão de teste, UAC ou firewall aberto. A alternativa de ponte nativa é proposta de ampliação do escopo, não feature entregue.
+
+## Complemento offline - contexto da ponte nativa, 19/10/2026
+
+`python -m unittest discover -s tools/tests -p test_native_bridge.py -v`: 12 PASS. Casos novos: faixas de `.pdata`/flags de unwind, referência RIP-relativa resolvida por deslocamento (não por valor absoluto) e grafo de chamadas diretas com alvo interior resolvido ao dono.
+
+`python tools/inspect_native_bridge.py D:\dev\mc3-coop-data\xrun\MC3Runner.exe`: PASS, saída privada `out/native-bridge-current.json`. Na build `6AD54432`, o mutex do callback (`1427E9EE8`) aparece só em `31067F/3106C5/3106DC`, dentro de `3105B0`; o caminho direto do input (`300D00`→`3068D0`/`306BB0`) e 13 ancestrais diretos têm zero referências e zero chamadas à aquisição. Unwind `3AD270`/`39EFA0` = versão 1, flags 0.
+
+Isso é inspeção de bytes, sem carregar o PE, executar código, abrir processo/jogo, rede, janela ou firewall. Não valida reentrância do callback durante o HLE, chamadas indiretas, exceção/longjmp, stack scratch, CarCfg persistente, buckets, perfil nem comportamento ao vivo. `execution_safe` e `native_calls_enabled` continuam false; nenhuma função guest foi chamada. A cópia `testgame` tem SHA/timestamp diferente (`6AD5001B`) e recebeu apenas a descoberta de tabela.
+
+## Teste ao vivo - ponte nativa e troca de modelo, 19/20-10-2026
+
+Testes com duas cópias descartáveis (`tools/pair.py`, portas 45703/45704), desktop invisível, áudio mudo, runner em caminho fixo. Não criei regra de firewall, não pedi UAC e não toquei no jogo/xrevive do usuário. O DLL testado foi compilado por `mod/build.cmd` com `native.cpp`.
+
+### 1. Prova de ABI no gancho (implementada)
+
+`MC3COOP_NATIVE_PROBE=1` chamou, da thread do jogo e pelo wrapper full-save, `3308C0`, `2BD910` (com ECX=player manager e um argumento) e mais três `3308C0`. Resultado nas duas cópias:
+
+```
+native: call guest=003308C0 argc=0 result=1 mismatch=0 esp=04927F8C
+native: call guest=002BD910 argc=1 result=1 mismatch=0 esp=04927F8C
+native: call guest=003308C0 argc=0 result=1 mismatch=0 esp=04927F8C (x3)
+native: probe PASS
+car: new world, local car ...
+```
+
+`mismatch=0` cobre EAX/EBX/ECX/EDX/ESI/EDI/EBP/ESP, x87, xmm0..7, FCW/MXCSR e flags emulados. Os cinco testes são repetidos no mesmo contexto; o jogo continuou e carregou o mundo normalmente. Nenhum deadlock de mutex foi observado.
+
+### 2. Troca de modelo em mundo carregado (bloqueada pelo próprio jogo release)
+
+A tentativa real de construir `vp_eclipse_04` no lugar do `vp_d_scion_tc_05` chegou ao ctor e ao build nativos:
+
+```
+native: model resolve ok=1 index=00000000
+native: factory ctor=1 f04=vp_eclipse_04 f54=80E7AD00 fE8=1 fE1=00 fEC=1
+native: factory build=1 f44=00000000 f4C=00000000 f50=837658E0
+native: swap build failed (wrapper=00000000 carData=00000000)
+```
+
+Causa demonstrada: `2CB2D0` chama `105B80`, que no caminho de entrada livre chama `105AA0`; esta rotina tenta criar o recurso e o próprio binário release responde com a string `Cannot make car resource on RELEASE - build on Beta/debug or ask Yomal why they are not in the assets!`, devolvendo 0. A continuar, `2CBC40` chama métodos virtuais com produto nulo e o runner registra `[ICALL] unresolved target` e encerra. O pool `[50A08C]` tem 16 entradas, mas só o modelo em uso está em modo 0; o modo 1 é do pool de garagem/showroom e `105B80` não o reutiliza no modo offline. Portanto **não há como criar um modelo diferente em mundo carregado nesta build release**, nem pela ponte nativa. A implementação final recusa antes de chamar o construtor e mantém o carro antigo.
+
+### 3. Troca sem reconectar pelo próximo carregamento (funciona)
+
+Fluxo com o host em ronda e a sessão conectada:
+
+1. No parceiro, a entrada selecionada da garagem foi trocada para `vp_eclipse_04` pelo comando de diagnóstico `localcar 2` (simula a escolha da garagem; não é a UI real).
+2. O host recebeu a configuração e manteve `live slot cars: vp_d_scion_tc_05 vp_d_scion_tc_05` (o remoto ainda era o tC). `car_model_pending=1`.
+3. O host carregou uma corrida normal pela ponte de marcador (`gorace`), sem reconectar.
+4. Depois da carga: `live slot cars: vp_d_scion_tc_05 vp_eclipse_04` no host, `current/next slot cars` com Eclipse na vaga 1. As duas cópias permaneceram `COOP 2/8 CONNECTED` e na mesma corrida (`serial=1`).
+
+Isso confirma o caminho suportado: a troca de modelo é aplicada no próximo carregamento normal (corrida ou garagem), sem reconectar; não é instantânea no mundo atual.
+
+### Limites
+
+- A simulação da escolha da garagem usou um comando de diagnóstico; a UI real da garagem não foi dirigida neste teste.
+- O jogo release não cria recursos de carro em runtime; a mensagem e o encerramento observados são a prova. Um build beta/debug poderia permitir o construtor, mas não é o produto.
+- Nenhum pacote/ZIP foi regenerado; o ZIP entregue continua no protocolo anterior.

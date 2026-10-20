@@ -160,6 +160,22 @@ std::string Run(const std::string& text) {
         car::Place(p);
         return "ok";
     }
+    if (c == "cars") return car::List();
+    if (c == "swapcar" && a.size() > 1) {  // test only: stage a garage car as the remote slot's new model
+        uint8_t cfg[car::kCarCfgBytes];
+        if (!car::GarageCfg(std::atoi(a[1].c_str()), cfg)) return "error garage index";
+        car::SetPartnerCar(1, cfg);
+        return "ok";
+    }
+    if (c == "swapfrom" && a.size() > 1) {  // test only: stage a NEXT setup slot's car as the remote slot's model
+        uint8_t cfg[car::kCarCfgBytes];
+        if (!car::SetupCfg(std::atoi(a[1].c_str()), cfg)) return "error setup slot";
+        car::SetPartnerCar(1, cfg);
+        return "ok";
+    }
+    if (c == "localcar" && a.size() > 1) {  // test only: the selected garage entry sends this setup car
+        return car::AdoptSetupAsLocal(std::atoi(a[1].c_str())) ? "ok" : "error setup slot";
+    }
     if (c == "coop") {
         auto port = [&](size_t i) { return uint16_t(a.size() > i ? std::atoi(a[i].c_str()) : coop::kDefaultPort); };
         if (a.size() == 1) return coop::Status();

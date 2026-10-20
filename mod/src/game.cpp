@@ -10,6 +10,7 @@
 
 #include "car.h"
 #include "mod.h"
+#include "native.h"
 #include "net/session.h"
 #include "overlay.h"
 #include "race.h"
@@ -72,6 +73,7 @@ void Start() {
     LoadSettings();
     Identity();
     coop::Init();
+    native::Init();
     std::thread(Loop).detach();
     Log("game: session started, identity %s", kImageSha1);
 }
@@ -91,6 +93,7 @@ void FiberTick() {
     uint64_t t[6];
     t[0] = Micros();
     try {
+        native::Tick();
         car::Tick(now);
         t[1] = Micros();
         race::Tick(coop::Hosting(), coop::PlayerCount() > 1 && coop::Networked());
@@ -137,7 +140,8 @@ std::string State() {
                   (unsigned long long)c[1].worst, (unsigned long long)c[2].total, (unsigned long long)c[2].worst,
                   (unsigned long long)c[3].total, (unsigned long long)c[3].worst, (unsigned long long)c[4].total,
                   (unsigned long long)c[4].worst);
-    return std::string(s) + hook + " " + car::Describe() + " " + race::Describe() + " " + traffic::Describe() + " " + ai::Describe();
+    return std::string(s) + hook + " " + car::Describe() + " " + race::Describe() + " " + traffic::Describe() + " " +
+           ai::Describe() + " " + native::Describe();
 }
 
 }  // namespace mod::game

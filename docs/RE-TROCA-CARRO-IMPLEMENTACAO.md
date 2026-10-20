@@ -52,3 +52,13 @@ Compilação completa por `mod/build.cmd`, artefatos em `out/mod`, log privado `
 3. Só depois ensaiar outro modelo em ronda, transições e desconexão, conferindo física, collider, desenho, áudio e referências. A nova fila/reconstrução não está simulada nem anunciada como existente.
 
 A suspensão dos ensaios ao vivo do handoff continua em vigor enquanto não houver caminho silencioso comprovado, sem avisos de firewall/UAC.
+
+## Resultado ao vivo (20/10/2026): release impede a troca em mundo carregado
+
+A ponte nativa foi validada (`native: probe PASS`, cinco chamadas, `mismatch=0`) e a construção do modelo diferente foi exercitada. O ctor `2CB270` e o build `2CBC40` executam, mas `105B80` não obtém carData: no caminho de entrada livre ele chama `105AA0`, que tenta criar o recurso e o binário **release** responde com `Cannot make car resource on RELEASE - build on Beta/debug or ask Yomal why they are not in the assets!` e retorna 0. `2CBC40` continua com produto nulo e o runner encerra em `[ICALL] unresolved target` (visto em `2CBD56/2CBD5D/2CBD64/2CBDCB`).
+
+O pool `[50A08C]` tem 16 entradas; na ronda só o modelo em uso estava em modo 0. Entradas em modo 1 (Eclipse/Montecarlo/GS430) pertencem ao pool de garagem/showroom e `105B80` não as reutiliza no modo offline. Não há, nesta build, uma chamada de dados ou de ponte que crie um recurso de carro novo em runtime. A implementação final recusa antes do construtor e mantém o carro antigo.
+
+**Caminho suportado, sem reconectar:** a configuração diferente continua em NEXT e é aplicada no próximo carregamento normal (corrida/garagem). Teste: parceiro trocou a garagem para Eclipse, host ainda mostrava tC; após o host carregar uma corrida, `live slot 1` passou a Eclipse, com as duas cópias conectadas. Não é troca instantânea no mundo atual.
+
+O teste usou o comando de diagnóstico `localcar`, não a UI da garagem. Nenhum novo ZIP foi gerado.

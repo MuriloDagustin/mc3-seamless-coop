@@ -83,9 +83,16 @@ ESTADO DESTA VERSÃO
   em memória simulada; o teste ao vivo desse caso ainda está pendente.
 - A espera usa uma segunda passagem local pela chegada. Pode repetir o aviso de chegada e incluir
   a espera no tempo registrado da corrida; não foi observado novo recorde falso de melhor volta.
-- Troca do carro remoto ainda exige recarregar o mundo (garagem/menu).
+- Trocar de modelo sem recarregar o mundo NÃO é possível nesta versão: o próprio jogo
+  (build release) recusa criar o recurso de um carro em runtime
+  ("Cannot make car resource on RELEASE ... not in the assets"). A ponte nativa foi testada
+  e não contorna essa limitação; forçar o construtor faz o jogo encerrar.
+- O caminho suportado NÃO exige reconectar: escolha o carro na garagem e o outro jogador
+  recebe a configuração; ela é aplicada no próximo carregamento normal (corrida ou garagem).
+  Testado: o parceiro trocou para Eclipse e o host passou a vê-lo como Eclipse ao carregar
+  uma corrida, com a sessão ainda conectada.
 - Nos fontes atuais, alterações compatíveis do mesmo modelo têm aplicação incremental implementada;
-  pintura/peças ainda precisam de confirmação visual no jogo. Outro modelo continua pendente para recarga.
+  pintura/peças ainda precisam de confirmação visual no jogo.
 - Os fontes integrados usam protocolo 7; o ZIP dc25ed3 já entregue usa protocolo 4.
   Não misture builds: ambos os jogadores precisam usar a mesma versão.
 - Nos fontes atuais, o parceiro tem bloqueio de largadas próprias na rua e recebe aviso se o host

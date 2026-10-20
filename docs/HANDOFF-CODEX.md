@@ -12,6 +12,14 @@ Implementada a instalação da configuração do mesmo modelo uma vez por revis�
 
 **Trocar o modelo inteiro sem recarregar o mundo continua NÃO implementado.** Investigação não encontrou pedido por slot consumido pelo jogo: factory temporária, updates não recriam, categoria3 destrói corrida/OppMgr/jogadores/tráfego, showroom não instala em player. Não zerar `player+14`, não forjar ponteiros, não chamar funções guest e não marcar loader carregado=false como se fosse request. Detalhes: `RE-TROCA-CARRO-IMPLEMENTACAO.md`, `RE-TROCA-CARRO-FACTORY.md` e `RE-TROCA-CARRO-RECURSOS.md`. Bit80 não é pedido de modelo; o setter271E00 escreve E0/E1.
 
+### Prioridade do usuário em19/10: troca integral sem recarga
+
+Depois do commit local9663375 (fluxo de resultado), o usuário priorizou explicitamente esta troca. Nova auditoria estática incluiu métodos virtuais do veículo/jogador e pacote nativo de configuração por rede; não foi identificado pedido de reconstrução individual. O pacote44 escreve somente NEXT; o update virtualFFD90 consome dirty80 para componentes existentes, sem chamar a fábrica humana. Não confundir esses caminhos com hot swap implementado.
+
+`PLANO-TROCA-CARRO-NATIVA.md` apresenta alternativa de investigação: ponte para rotinas nativas, ABI da versão atual e transação completa de recursos/referências. Isso depende de ampliar a restrição vigente “não chamar funções guest”; nenhuma chamada ou alteração de runtime foi feita. Não afirmar impossibilidade geral nem prometer que permitir chamadas basta. Modelo diferente permanece pendente para carga normal. Nenhum jogo, launcher ou firewall aberto nessa investigação.
+
+**Autorização posterior do usuário:** respondeu “Investigar a ponte nativa”. Prosseguir com investigação da ponte e ABI; não repetir essa pergunta. Isso amplia o escopo da investigação acima, sem revogar a suspensão de jogo/testes ao vivo/firewall e sem provar viabilidade da troca. `tools/inspect_native_bridge.py` faz inspeção estática dos arquivos PE (não os carrega nem executa); seus9 testes passaram e os runners atual/antigo tiveram tabela de20302 funções identificada. Ainda não é uma API de chamadas nativas nem hot swap implementado.
+
 Responda em português. Trabalhe em `C:\dev\mc3-coop` (branch `coop-noite`). Commits locais podem ser feitos ao fim de cada item testado. **Nunca faça push.**
 
 ## Interrupção por avisos de firewall — atualização Codex
@@ -146,3 +154,20 @@ Pedido do usuário: "só eu como host deveria poder iniciar as corridas e prosse
 - Build DLL e suíte sintética completos passaram. Não foi aberto jogo/launcher nem firewall; a suspensão dos testes ao vivo permanece. Não foi gerado pacote novo. README atualizado para protocolo7; ZIP dc25ed3 continua antigo.
 - Evidência e limites: `RE-HOST-NEXT.md`, `RE-HOST-SAIDA-UI.md`, `RE-HOST-FLUXO-IMPLEMENTACAO.md`. Próximo passo da prioridade1: validar os critérios de duas cópias quando os testes ao vivo forem retomados, especialmente série2+ etapas e retorno à rua. Não tratar o fluxo como comprovado no jogo.
 - Pendências de implementação preservadas: exclusão nativa do ausente da classificação; troca de modelo sem recarga. Não zerar contadores/ponteiros da corrida nem reconstruir veículo por escrita especulativa.
+
+## Continuação Claude, 19/10: contexto do mutex da ponte nativa (offline)
+
+- Continuei a investigação autorizada da ponte a partir do ponto em que o Codex parou. Estendi `tools/inspect_native_bridge.py` para validar, por bytes e de forma reproduzível, o contexto estático do gancho: delimitação de funções por `.pdata`, referências RIP-relativas, grafo de chamadas diretas, unwind e alcance do mutex do callback.
+- Resultado na build `51354a04…` (`6AD54432`): o mutex `1427E9EE8` só é referenciado dentro de `3105B0`; o callback `31B690` a chama e libera. O caminho direto do input (`300D00` → `3068D0`/`306BB0`) e 13 ancestrais diretos não referenciam nem chamam essa aquisição. Os unwind de `3AD270`/`39EFA0` seguem versão 1, flags 0.
+- Isso remove o mutex já detido como deadlock inevitável **nessa cadeia direta**, mas NÃO prova reentrância do callback durante o HLE, chamadas indiretas, exceção/longjmp, stack scratch, vida útil da CarCfg, capacidade dos buckets ou perfil de habilidade. `execution_safe`/`native_calls_enabled` continuam false; nenhuma função guest foi chamada.
+- `python -m unittest discover -s tools/tests -p test_native_bridge.py -v`: 12 testes PASS (9 anteriores + `.pdata`/unwind, RIP-relativo e grafo por dono). `python tools/inspect_native_bridge.py D:\dev\mc3-coop-data\xrun\MC3Runner.exe` passou; a cópia `testgame` (`6AD5001B`) não tem perfil de runtime.
+- Próximo passo técnico continua sendo provar reentrância/lifecycle; isso exige uma chamada inofensiva em execução isolada autorizada. A suspensão de testes ao vivo/firewall permanece e não foi revogada por esta etapa. Nada de ZIP novo, push ou alteração de runtime.
+
+## Continuação Claude, 20/10: ponte validada e resultado da troca de modelo
+
+- `mod/src/native.cpp` implementa a sonda opt-in `MC3COOP_NATIVE_PROBE=1`: valida build/contexto (`.pdata`, globais, KPCR/KTHREAD, stack), chama `3308C0` e `2BD910` pelo wrapper full-save e compara registradores/x87/xmm/flags. Ao vivo, duas cópias, cinco chamadas, `probe PASS`, `mismatch=0`; o jogo continuou e carregou o mundo. Isso valida resolução, argumentos, ECX/thiscall, retorno e preservação de contexto no gancho.
+- A construção de um modelo diferente foi exercitada. `2CB270`/`2CBC40` rodam, mas `105B80` retorna 0: `105AA0` tenta criar o recurso e o **release** responde `Cannot make car resource on RELEASE ... not in the assets!`. `2CBC40` então segue com produto nulo e o runner encerra em ICALL não resolvido. O pool de carData só tem o modelo em uso em modo 0; o modo 1 (garagem/showroom) não é reutilizado no offline. **Troca instantânea de modelo em mundo carregado é impossível nesta build release.**
+- `SwapRemote` final apenas faz o preflight e recusa antes do construtor, mantendo o carro antigo. A configuração diferente continua staged em NEXT e é aplicada no próximo carregamento normal. Testado ao vivo: parceiro trocou a garagem para Eclipse; host ainda mostrava tC; após `gorace`/carga da corrida, `live slot 1` passou a Eclipse, com as duas cópias conectadas e na mesma corrida. Sem reconectar.
+- Comandos de diagnóstico adicionados ao canal de teste: `cars`, `garage`/`swapcar`, `swapfrom`, `localcar`. O teste usou `localcar` para simular a escolha da garagem, não a UI real.
+- `python tools/test_coop_memory.py`: PASS com `native.cpp` incluído e `Env` stub; `cmd /c mod\build.cmd`: PASS. Nenhuma regra de firewall/UAC foi criada; nenhum jogo/xrevive do usuário foi tocado. Sem commit/push e sem ZIP novo.
+- Próximo passo possível: aplicar a troca também quando a cópia entra/sai da garagem no fluxo real da UI, e validar a escolha de carro pela UI do parceiro. A limitação de recurso do release permanece para qualquer troca no mundo atual.

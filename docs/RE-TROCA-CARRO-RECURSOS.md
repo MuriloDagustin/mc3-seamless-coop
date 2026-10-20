@@ -165,3 +165,9 @@ O desenho tem referências reversas e alocações específicas de modelo em `0xF
 A conclusão é limitada aos caminhos de personalização e carregador acima. Não é prova de inexistência de qualquer mecanismo no jogo. Para implementar troca de TypeName sem recarregar a sessão ainda é necessário identificar um pedido de dados consumido pelo jogo que faça a reconstrução completa, ou demonstrar outro caminho nativo com sua vida útil e registros. A investigação de factory/player manager foi feita em subtarefa separada.
 
 Consultas: `tools/xref.py asm/callers/callees`, buscas delimitadas nos recompilados e leitura apenas da tabela de vtable no `assets/default.xbe`. Nenhum binário foi executado, nenhuma memória de processo foi acessada, nenhum pointer swap foi implementado.
+
+## Resultado ao vivo 20/10: o release não cria o recurso
+
+Teste com duas cópias (`TESTE-ISOLADO-2026-10-18.md`) exercitou `2CB270`/`2CBC40`. O `105B80` retornou 0: o caminho de entrada livre chama `105AA0`, que tenta criar o carData e o binário release responde `Cannot make car resource on RELEASE - build on Beta/debug or ask Yomal why they are not in the assets!`. Com produto nulo, `2CBC40` continua e o runner encerra em `[ICALL] unresolved target`. O pool `[50A08C]` tinha 16 entradas; só o modelo em uso estava em modo 0. Entradas em modo 1 (garagem/showroom) não são reutilizadas pelo modo offline. A ponte nativa funciona para chamadas, mas não cria recursos que o release não possui.
+
+A troca de modelo suportada continua sendo a próxima carga normal (NEXT), sem reconectar; foi testada com Eclipse e aplicou no host após carregar uma corrida.
