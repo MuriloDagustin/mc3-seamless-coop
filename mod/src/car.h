@@ -42,5 +42,6 @@ void SetGrid(int grid);     // this copy's place in the shared grid: the host 0,
 int PartnerSlots();          // partners with a car the setups now hold
 void Tick(uint64_t now_ms);  // game-thread hook: setup/config writes and partner poses
 std::string Describe();     // installed/pending remote configurations, diagnostics only
+bool ModelPending();        // a different model is staged for the next normal load
 
 }  // namespace mod::car

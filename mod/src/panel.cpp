@@ -5,6 +5,7 @@
 #include <imgui.h>
 
 #include "mod.h"
+#include "car.h"
 #include "net/session.h"
 #include "race.h"
 #include "settings.h"
@@ -142,6 +143,9 @@ void DrawPanel(bool open) {
         std::string notice = race::Notice();
         if (!notice.empty()) ImGui::GetForegroundDrawList()->AddText(
             ImVec2(12, 30), IM_COL32(255, 220, 90, 255), notice.c_str());
+        if (car::ModelPending()) ImGui::GetForegroundDrawList()->AddText(
+            ImVec2(12, notice.empty() ? 30 : 50), IM_COL32(255, 220, 90, 255),
+            "Partner car change: applies on the next race or garage load (no reconnect).");
     }
     if (!open) return;
     ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 30, 0), ImGuiCond_FirstUseEver);

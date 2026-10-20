@@ -445,6 +445,13 @@ std::string Describe() {
                                 (unsigned long long)applications);return text;
 }
 
+bool ModelPending() {
+    std::lock_guard lock(g_lock);
+    for (int i = 1; i < 8; i++)
+        if (g_remote[i].active && g_remote[i].have_cfg && g_remote[i].model_pending) return true;
+    return false;
+}
+
 void AddSample(Remote& r, const Pose& p, uint64_t at_ms) {
     r.active = true;
     uint64_t now = GetTickCount64();
