@@ -130,3 +130,8 @@ Verificações finais:
 Não foram iniciados jogo, MC3Coop/MC3Runner, sockets de sessão ou testes de GUI. Nenhuma janela/foco, processo estrangeiro, regra de firewall ou UAC foi alterado. O teste sintético mantém a inspeção inerte de PE com `DONT_RESOLVE_DLL_REFERENCES`, sem executar código do runner. O pacote privado já entregue não foi regenerado nem publicado; protocolo6 exige atualizar os dois jogadores quando houver nova entrega.
 
 Pendências da prioridade1: espera no resultado/decisão pós-corrida, próxima etapa de série com serial nova, retorno à rua ao abandonar torneio ativo e remoção nativa da entrada ausente. A análise em `RE-HOST-FLUXO-RESULTADO.md` prova o gate limitado de12 para tipos1/3, mas também mostra callbacks de tarefa que podem sobrescrever a ação e inicialização que seria pulada ao suspender bytes isolados. Essas propostas não foram ativadas no runtime. Os critérios de duas cópias permanecem sem execução nesta etapa.
+# Complemento offline — fluxo pós-corrida, 19/10/2026
+
+Implementação e limites em `RE-HOST-FLUXO-IMPLEMENTACAO.md`. `python tools/test_coop_memory.py` passou com fluxo completo simulado de espera, Quit/Sim, Next, cursor incompatível, perda/reordenação de decisões e histórico de setups. Log: `out/test-host-flow-memory.log`.
+
+`cmd /c mod\build.cmd` passou e produziu `out/mod/xinput1_4.dll`; log `out/build-host-after.log`. Avisos existentes de ImGui. Nenhum executável do jogo/launcher, rede de teste, janela ou firewall foi aberto. Isso não comprova timing dos menus, carga nem prêmio em série no jogo. Sem novo ZIP e sem push.

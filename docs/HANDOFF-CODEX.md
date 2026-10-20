@@ -137,3 +137,12 @@ Pedido do usuário: "só eu como host deveria poder iniciar as corridas e prosse
 - Ainda faltam: espera de resultado/decisão do host, próxima etapa com serial nova, retorno à rua com tarefa de torneio ativa e exclusão nativa completa do ausente. `RE-HOST-FLUXO-RESULTADO.md` documenta os consumidores que sobrescrevem a ação e por que suspender apenas bytes da tarefa pode pular a inicialização da carga. Não usar estado13 nem zerar índice de tarefa como atalho.
 - Verificação offline: `tools/test_coop_memory.py` passou com testes novos de rua/fase/posse, contexto/posição e isolamento de crédito, mais os testes existentes de IA, chegada, tráfego e configuração. Nenhum jogo/launcher, janela, rede ou firewall foi aberto para essas validações.
 - Mapas novos: `RE-HOST-BLOQUEIO-LARGADA.md`, `RE-HOST-PRESENCA-CORRIDA.md`, `RE-HOST-FLUXO-RESULTADO.md`. Detalhes dos comandos e limites no relatório `TESTE-ISOLADO-2026-10-18.md`.
+
+## Continuação Codex, 19/10: fluxo pós-corrida implementado offline
+
+- A etapa anterior foi commitada localmente em `981aaa2`, sem push. Este registro substitui o status histórico acima sobre ausência de implementação do resultado.
+- Protocolo7: decisão Wait/Street/Next por serial/revisão; histórico de8 decisões e setups retransmitidos. Parceiro espera mesmo sem receber Wait. Input do guest0 é filtrado; saída e avanço usam menus nativos identificados, com confirmação Sim e preservação de recompensa/autosave.
+- Host detecta nova etapa carregada e publica identidade/serial nova. Parceiro valida seu cursor por identidade, não pelo UUID do save. Cursor diferente usa saída nativa para a rua e largada pendente. A serial anterior só é abandonada quando a confirmação nativa de Continue é entregue.
+- Build DLL e suíte sintética completos passaram. Não foi aberto jogo/launcher nem firewall; a suspensão dos testes ao vivo permanece. Não foi gerado pacote novo. README atualizado para protocolo7; ZIP dc25ed3 continua antigo.
+- Evidência e limites: `RE-HOST-NEXT.md`, `RE-HOST-SAIDA-UI.md`, `RE-HOST-FLUXO-IMPLEMENTACAO.md`. Próximo passo da prioridade1: validar os critérios de duas cópias quando os testes ao vivo forem retomados, especialmente série2+ etapas e retorno à rua. Não tratar o fluxo como comprovado no jogo.
+- Pendências de implementação preservadas: exclusão nativa do ausente da classificação; troca de modelo sem recarga. Não zerar contadores/ponteiros da corrida nem reconstruir veículo por escrita especulativa.

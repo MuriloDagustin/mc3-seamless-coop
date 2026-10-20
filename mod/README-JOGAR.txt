@@ -86,13 +86,17 @@ ESTADO DESTA VERSÃO
 - Troca do carro remoto ainda exige recarregar o mundo (garagem/menu).
 - Nos fontes atuais, alterações compatíveis do mesmo modelo têm aplicação incremental implementada;
   pintura/peças ainda precisam de confirmação visual no jogo. Outro modelo continua pendente para recarga.
-- Os fontes integrados usam protocolo 6; o ZIP dc25ed3 já entregue usa protocolo 4.
+- Os fontes integrados usam protocolo 7; o ZIP dc25ed3 já entregue usa protocolo 4.
   Não misture builds: ambos os jogadores precisam usar a mesma versão.
 - Nos fontes atuais, o parceiro tem bloqueio de largadas próprias na rua e recebe aviso se o host
   largar enquanto ele está na garagem. Posições de outra corrida são descartadas. Esses novos
   comportamentos passaram em memória simulada; ainda precisam de confirmação no jogo.
-- A espera no resultado e o avanço de torneios controlados pelo host ainda estão em implementação.
-  O parceiro ausente ainda pode aparecer na classificação nativa como concluído/DNF.
+- Nos fontes atuais, o parceiro espera a decisão do host no resultado. O retorno à rua e o avanço
+  de série usam os comandos dos menus nativos, com identificação da próxima corrida e nova serial.
+  Se a carreira local estiver em outra etapa, o caminho previsto é sair para a rua e seguir o host.
+  Isso passou em memória simulada e compilou; menus, tempos de carga e séries ainda exigem teste no jogo.
+  Menus não reconhecidos ficam aguardando; use F10 para desconectar se necessário.
+- O parceiro ausente ainda pode aparecer na classificação nativa como concluído/DNF.
 - Salas EOS entre dois PCs ainda precisam do teste com o amigo; criar sala localmente não prova a conexão.
 
 OBSERVAÇÕES

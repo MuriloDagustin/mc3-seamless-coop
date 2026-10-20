@@ -220,10 +220,14 @@ extern "C" DWORD WINAPI ProxyXInputGetState(DWORD user, XINPUT_STATE* state) {
         auto f = REAL(DWORD(WINAPI*)(DWORD, XINPUT_STATE*), "XInputGetState");
         r = f ? f(user, state) : ERROR_DEVICE_NOT_CONNECTED;
     }
-    // The guest overwrites model+0x132 from this input later in the frame. Supply the actual
-    // headlight button as well, so the ordinary marker challenge survives that update.
-    if (guest && user == 0 && r == ERROR_SUCCESS && state && mod::race::ChallengeInput())
-        state->Gamepad.wButtons |= XINPUT_GAMEPAD_RIGHT_SHOULDER;
+    // Filter real buttons first. The native marker still needs the mod's headlight button after a result
+    // has returned to cruise, including while a stale held confirmation is being suppressed.
+    if (guest && user == 0 && r == ERROR_SUCCESS && state) {
+        uint16_t buttons = state->Gamepad.wButtons;
+        if (mod::race::ControlInput(buttons)) state->Gamepad = {};
+        state->Gamepad.wButtons = buttons;
+        if (mod::race::ChallengeInput()) state->Gamepad.wButtons |= XINPUT_GAMEPAD_RIGHT_SHOULDER;
+    }
     mod::game::Pad(user, r == ERROR_SUCCESS ? state : nullptr);
     return r;
 }

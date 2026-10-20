@@ -45,8 +45,8 @@ constexpr uint64_t kHelloMs = 500;
 constexpr uint64_t kTimeoutMs = 5000;
 
 constexpr uint32_t kMagic = 0x4F43334D;  // "M3CO"
-constexpr uint16_t kProtocol = 6; // pose world identity; all copies must run the same build
-enum Type : uint8_t { kHello = 1, kWelcome, kState, kBye, kDiscover, kOffer, kRoster, kFull, kCar, kRaceStart, kWon, kTraffic, kFinished, kAi, kRaceSetup };
+constexpr uint16_t kProtocol = 7; // host post-race decisions; all copies must run the same build
+enum Type : uint8_t { kHello = 1, kWelcome, kState, kBye, kDiscover, kOffer, kRoster, kFull, kCar, kRaceStart, kWon, kTraffic, kFinished, kAi, kRaceSetup, kAfter };
 
 #pragma pack(push, 1)
 struct Header {
@@ -94,6 +94,7 @@ struct WonPacket {  // the sender won the race it shared (again with what 1st pl
 };
 struct FinishedPacket { Header h; mod::race::Finished result; };
 struct SetupPacket { Header h; mod::race::Setup setup; };
+struct AfterPacket { Header h; mod::race::After after; };
 #pragma pack(pop)
 constexpr int kMaxDatagram = 1170;  // also fits the EOS P2P transport
 union Packet {
@@ -411,6 +412,13 @@ void Receive(uint64_t now) {
                 if (source == 0 && g_cfg.role == Role::Join)
                     mod::traffic::Receive(in.raw + sizeof(Header), n - int(sizeof(Header)));
                 break;
+            case kAfter:
+                if (source == 0 && g_cfg.role == Role::Join && n == int(sizeof(AfterPacket))) {
+                    AfterPacket ap;
+                    std::memcpy(&ap, &in, sizeof ap);
+                    mod::race::OnAfter(ap.after);
+                }
+                break;
             case kBye:
                 LOGR("coop: player %d left", source + 1);
                 if (g_cfg.role == Role::Host) Forget(source);
@@ -421,6 +429,14 @@ void Receive(uint64_t now) {
 }
 
 void Send(uint64_t now) {
+    mod::race::After after;
+    if (g_cfg.role == Role::Host && mod::race::TakeAfter(after)) {
+        AfterPacket ap{}; ap.after = after;
+        for (int i = 1; i < kMaxPlayers; i++) if (g_players[i].have && g_players[i].welcomed) {
+            ap.h = Make(kAfter, i, now);
+            SendTo(i, &ap, sizeof ap);
+        }
+    }
     mod::race::Start start;
     if (g_cfg.role == Role::Host && mod::race::TakeStart(start)) {
         RacePacket rp{};

@@ -1,5 +1,6 @@
 // The career race flow shared by the copies (race.h, docs/RE-CORRIDA.txt).
 #include <cstdio>
+#include <array>
 #include <algorithm>
 #include <limits>
 #include <cstring>
@@ -82,6 +83,8 @@ uint8_t g_street_saved = 0;
 std::string g_notice;
 Setup g_setup_out{}, g_setup_in{};
 Setup g_pending_setup{};
+std::array<Setup, 8> g_setup_history{};
+uint32_t g_setup_relay_cursor = 0;
 uint64_t g_setup_send_at = 0;
 bool g_have_setup = false;
 uint32_t g_setup_applied_revision = 0;
@@ -96,6 +99,7 @@ Finished g_finished_out{}, g_finished_peer{};
 float g_gate_finish_time = 0, g_gate_last_lap = 0;
 const char* g_gate_reason = "off";
 constexpr uint64_t kFinishWaitMs = 15000, kReplayWaitMs = 2500;
+void PublishHostWaiting(const Start& start);
 
 void BeginRace(uint32_t serial) {
     g_race_serial = serial;
@@ -241,7 +245,10 @@ bool MatchesSharedRace() {
 void CaptureHostSetup() {
     if (!g_race_serial || g_start_out.serial != g_race_serial) return;
     uint32_t next = P(0x53F2E4);
-    if (!SetupMatches(next, g_start_out.city, g_start_out.race_idx)) return;
+    if (!SetupMatches(next, g_start_out.city, g_start_out.race_idx)) {
+        next = P(kSetupCurrent);
+        if (Cruise() || !SetupMatches(next, g_start_out.city, g_start_out.race_idx)) return;
+    }
     uint32_t mask = R32(next + 0x3D4), limit = R32(next + 0x40);
     if (limit > 100) return; // 28D740 uses 100 as the unrestricted sentinel.
     uint8_t opponents[8][0x2C]{};
@@ -257,6 +264,8 @@ void CaptureHostSetup() {
     uint32_t revision = g_setup_out.revision + 1;
     g_setup_out = {g_race_serial, revision, mask, limit, g_start_out.city, 0, g_start_out.race_idx, {}};
     std::memcpy(g_setup_out.opponents, opponents, sizeof opponents);
+    g_setup_history[g_race_serial % g_setup_history.size()] = g_setup_out;
+    g_setup_relay_cursor = g_race_serial % uint32_t(g_setup_history.size());
     g_setup_send_at = 0;
     Log("race: host setup serial %u revision %u mask=%08X limit=%u", g_race_serial, revision, mask, limit);
 }
@@ -303,6 +312,7 @@ void HostTick() {
     g_start_out = s;
     g_out_start = true;
     ActivateStart(s, true);
+    PublishHostWaiting(s);
     Log("race: host starts %s (city %d race %d)", s.name, s.city, s.race_idx);
 }
 
@@ -467,6 +477,10 @@ void PartnerTick(uint64_t now) {
     g_phase_at = now;
     Log("race: taken to the start of %s", s.name);
 }
+
+#include "race_next.inc"
+#include "race_ui.inc"
+#include "race_flow.inc"
 
 // This counter belongs to the common lap/checkpoint race family only. Other modes use these bytes differently.
 bool HasHumanFinishCounter(uint32_t race) {
@@ -763,6 +777,8 @@ void Tick(bool hosting, bool connected) {
     std::lock_guard lock(g_lock);
     uint64_t now = GetTickCount64();
     g_notice.clear();
+    if (!connected || hosting) ResultFlowTick(hosting, connected, now);
+    if (hosting && connected) ObserveHostExit();
     if (g_phase && (g_cancel_marker || !connected || hosting || (!MarkerStarted() && !MarkerContext()))) CancelMarker();
     g_cancel_marker = false;
     StreetGuard(hosting, connected); // release before PartnerTick tests cruise+0D
@@ -785,9 +801,11 @@ void Tick(bool hosting, bool connected) {
     int state = RaceState();
     if (loaded && g_race_serial && g_bound_race &&
         (loaded != g_bound_race || (g_bound_ended && state >= 2 && state <= 6))) {
-        Log("race: next race of a series, serial %u ends; this race counts for each career on its own", g_race_serial);
-        BeginRace(0);
-        ai::SetRace(0, -1, -1, false);
+        if (!(hosting && PublishHostSeries())) {
+            Log("race: next race has no authoritative matching start, serial %u ends", g_race_serial);
+            BeginRace(0);
+            ai::SetRace(0, -1, -1, false);
+        }
     }
     if (loaded && g_race_serial && MatchesSharedRace()) {
         if (g_bound_race != loaded) g_bound_ran = g_bound_ended = false;
@@ -798,12 +816,18 @@ void Tick(bool hosting, bool connected) {
         if (state >= 7 && g_bound_ran) g_bound_ended = true;
     }
     RaceTick(true);
+    ResultFlowTick(hosting, connected, now);
     g_challenge_input = now < g_lights_until || g_phase != 0;
 }
 
 bool ChallengeInput() {
     std::lock_guard lock(g_lock);
     return g_challenge_input;
+}
+
+bool ControlInput(uint16_t& buttons) {
+    std::lock_guard lock(g_lock);
+    return FilterResultInput(buttons);
 }
 
 std::string Notice() {
@@ -834,11 +858,35 @@ void ResetNetwork() {
     g_have_start = g_start_done = g_out_start = false;
     g_start_in = g_start_out = {};
     g_pending_setup = {};
+    g_setup_history = {}; g_setup_relay_cursor = 0;
     g_done_serial = g_sent_id = g_serial = 0;
     g_challenge_input = false;
     g_lights_until = 0;
     BeginRace(0);
+    ResetFlowNetwork();
     ai::SetRace(0, -1, -1, false);
+}
+
+void OnAfter(const After& after) {
+    std::lock_guard lock(g_lock);
+    if (!ValidAfter(after)) return;
+    After& slot = g_after_in[after.serial % g_after_in.size()];
+    if (slot.revision && int32_t(after.revision - slot.revision) <= 0) return;
+    slot = after;
+}
+
+bool TakeAfter(After& after) {
+    std::lock_guard lock(g_lock);
+    uint64_t now = GetTickCount64();
+    if (g_after_send_at && now - g_after_send_at < 100) return false;
+    for (size_t i = 0; i < g_after_out.size(); i++) {
+        uint32_t index = g_after_cursor++ % uint32_t(g_after_out.size());
+        if (!g_after_out[index].serial) continue;
+        after = g_after_out[index];
+        g_after_send_at = now ? now : 1;
+        return true;
+    }
+    return false;
 }
 
 void OnStart(const Start& s) {
@@ -903,12 +951,16 @@ bool TakeStart(Start& out) {
 
 bool TakeSetup(Setup& out) {
     std::lock_guard lock(g_lock);
-    if (!g_setup_out.serial || g_setup_out.serial != g_race_serial) return false;
     uint64_t now = GetTickCount64();
     if (g_setup_send_at && now - g_setup_send_at < 100) return false;
-    g_setup_send_at = now ? now : 1;
-    out = g_setup_out;
-    return true;
+    for (size_t i = 0; i < g_setup_history.size(); i++) {
+        uint32_t index = g_setup_relay_cursor++ % uint32_t(g_setup_history.size());
+        if (!g_setup_history[index].serial) continue;
+        out = g_setup_history[index];
+        g_setup_send_at = now ? now : 1;
+        return true;
+    }
+    return false;
 }
 
 void OnSetup(const Setup& setup) {
@@ -967,9 +1019,10 @@ std::string GoToOpenRace(int index) {
 std::string Describe() {
     std::lock_guard lock(g_lock);
     char s[512];
-    std::snprintf(s, sizeof s, "race_state=%d cruise=%d phase=%d start_in=%s partner_won=%d won_sent=%d prize=%d gate=%d gate_reason=%s terminal=%d/%d street_hold=%d",
+    std::snprintf(s, sizeof s, "race_state=%d cruise=%d phase=%d start_in=%s partner_won=%d won_sent=%d prize=%d gate=%d gate_reason=%s terminal=%d/%d street_hold=%d result_wait=%d next_load=%u",
                   RaceState(), Cruise() != 0, g_phase, g_have_start ? g_start_in.name : "-", g_partner_won,
-                  g_won_sent, g_partner_prize, int(g_gate), g_gate_reason, g_local_finished, g_peer_finished, g_street_guard != 0);
+                  g_won_sent, g_partner_prize, int(g_gate), g_gate_reason, g_local_finished, g_peer_finished, g_street_guard != 0,
+                  g_result_hold, g_result_loading ? g_result_load_serial : 0);
     return s;
 }
 

@@ -34,6 +34,7 @@ void Fixture() {
     std::fill(ram.begin(),ram.end(),0);
     mod::car::g_remote = {};
     mod::race::g_have_start=false; mod::race::g_phase=0;
+    mod::race::g_setup_history={}; mod::race::g_setup_relay_cursor=0;
     mod::race::BeginRace(101);
     W32(0x53F2E0,setup); W32(0x53F2E4,next_setup); W32(0x557F0C,career);
     W32(career+0x0C,data); W32(career+0x14,rewards);
@@ -92,12 +93,20 @@ void SetupAuthorityTests() {
 #include "host_street_tests.inc"
 #include "race_context_tests.inc"
 #include "world_pose_tests.inc"
+#include "race_next_tests.inc"
+#include "race_ui_tests.inc"
+#include "race_after_tests.inc"
+#include "race_flow_tests.inc"
 int main() {
     RaceContextTests();
     HostStreetTests();
     HostMarkerPhaseTests();
     WorldPoseTests();
     WorldCreditTests();
+    RaceNextTests();
+    RaceUiTests();
+    RaceAfterTests();
+    RaceFlowTests();
     SetupAuthorityTests();
     AiMemoryTests();
     FinishGateTests();

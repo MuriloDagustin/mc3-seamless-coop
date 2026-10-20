@@ -38,15 +38,27 @@ struct Setup {
     // Eight 2C-byte setup opponent records: model index, enabled, inline name and variant; no pointers.
     uint8_t opponents[8][0x2C];
 };
+enum class AfterAction : uint8_t { Wait, Street, Next };
+struct After {
+    uint32_t serial, revision; // finished race and host decision generation
+    AfterAction action;
+    int8_t city;
+    uint16_t reserved;
+    Start next;               // Next only; its identity is resolved against the receiver's local task records
+};
 #pragma pack(pop)
+static_assert(sizeof(After) == 128);
 
 // Game thread only (the verified xinput hook); includes a human-finish counter read/modify/write.
 void Tick(bool hosting, bool connected);
 // Only merge into a successful, verified guest poll of controller 0, after reading the real/test pad.
 bool ChallengeInput();
+bool ControlInput(uint16_t& buttons); // verified guest controller0 only; true also clears analog inputs
 std::string Notice();  // short player-facing message, safe for the render thread
 World Context();      // strict loaded world identity; pending starts are not loaded races
 void ResetNetwork();  // new transport/host generation; native loans are released on the next game hook
+void OnAfter(const After& after);
+bool TakeAfter(After& after);
 
 // session thread: what came from the others, what goes to them
 void OnStart(const Start& s);
