@@ -55,18 +55,18 @@ Cadeia demonstrada:
 
 ### Evidência do pool `[50A08C]`
 
-Pool de 16 entradas, 16 bytes cada. Na ronda, as entradas em uso eram:
+Pool de 16 entradas, 16 bytes cada. Na ronda, as entradas em uso eram (o número é o **model index**, não o índice do pool):
 
 ```
-índice 00  carData 83295380  modo 1  (vp_eclipse_04)
-índice 05  carData 83335380  modo 1  (vp_montecarlo_78)
-índice 0A  carData 833C7B00  modo 1  (vp_gs430_04)
-índice 45  carData 83471780  modo 0  (vp_d_scion_tc_05, o carro em uso)
+pool[0]: model 0x00  carData 83295380  modo 1  (vp_eclipse_04)
+pool[1]: model 0x05  carData 83335380  modo 1  (vp_montecarlo_78)
+pool[2]: model 0x0A  carData 833C7B00  modo 1  (vp_gs430_04)
+pool[3]: model 0x45  carData 83471780  modo 0  (vp_d_scion_tc_05, o carro em uso)
 ```
 
 O modo 1 é do pool de garagem/showroom e não é reutilizado pelo modo offline. Só o modelo em uso tem entrada modo 0.
 
-**Conclusão:** a troca instantânea de modelo em mundo carregado é impossível nesta build release. Não é limitação da ponte; é ausência do criador/assets de recurso de carro no release.
+**Conclusão refinada:** a criação de um **recurso novo** em runtime está bloqueada no release. A possibilidade de servir um veículo completo com um recurso já carregado (modo 1) **não foi demonstrada**; o ramo `105BD6`/`210630` existe, mas exige prova de ownership/registro/rebind. Portanto a troca instantânea está **não demonstrada**, não "impossível em geral".
 
 ## 3. Troca sem reconectar pelo próximo carregamento: funciona
 
@@ -101,3 +101,27 @@ Esse é o caminho suportado atual: a configuração diferente fica em NEXT e é 
 3. **Há caminho de carga sem reconectar mais suave?** O fluxo NEXT funciona em corrida/garagem. Vale a pena automatizar uma transição controlada de garagem quando há modelo pendente, ou isso destrói estado de corrida/série?
 4. **UI real da garagem:** o teste usou `localcar`; validar a seleção real do parceiro, a leitura de `LocalCarCfg` e o envio no timing da UI.
 5. **Outros modelos:** o teste usou Eclipse, que era modelo de adversário/garagem e pôde ser carregado no mundo. Testar um modelo que não aparece no setup da próxima corrida para confirmar que o NEXT ainda o carrega no load normal.
+
+## Atualização 20/10: ressalvas do Codex e teste da UI real
+
+### `105AA0` / `setup+0x10F`
+
+`105AA0` lê `[CURRENT setup+0x10F]`; se zero, retorna 0. Com a flag ativa, monta `$/resources/vehicle/%s/%s` e chama `2105F0` → `2126C0`, que abre/lê arquivo, valida cabeçalho e aloca memória. A mensagem `Cannot make car resource on RELEASE ... not in the assets!` (0x455230) aparece quando esse caminho falha. O escritor de `+0x10F` é `268D97`, dentro de `268D80`, que prepara o **NEXT** setup (`[53F2E4]+0x10F=1`) durante a carga; chamadores: `12440`, `126C8`, `33D6C0`. Ou seja, a flag é de **preparação de setup/carga**, não um pedido de criação em runtime.
+
+### `105B80` / `entry+0x0A` / `210630`
+
+O primeiro loop de `105B80` compara model index (`entry+0`) e modo (`entry+8`). Se o modo coincide e `entry+0x0A != 0`, salta para `105BD6`: libera/rebinda o recurso em `entry+0x0C` via `210630` e `105A40`, e devolve `entry+4`. Isso é **reutilização/rebind** de um carData existente, não criação de arquivo. Porém o factory offline chama `105B80` com `dl=0` e as entradas existentes de outros modelos estão em modo 1; não há correspondência. Copiar/forçar uma entrada para modo 0, ou chamar `105B80` com modo 1, exigiria provar ownership, registro, compatibilidade de gameplay e rollback. Não foi feito.
+
+### UI real da garagem
+
+- `LocalCarCfg` foi corrigido para espelhar `155920`: origem 1 lê `0x541700 + index*0x108` (banco central); origem 0 lê `0x53F810 + 53F80D*0x108` (coleção local). Só publica quando `mode==2` (carreira/cruise/corrida), não enquanto o jogador navega na garagem (mode 5) ou front end (3).
+- Teste real: com duas versões na garagem, o parceiro usou o **stick direito** para trocar a versão, `A` → `Load Vehicle` → `Yes`, e saiu da garagem. O carro local mudou de Eclipse para tC e foi enviado ao host.
+- O host recebeu `vp_d_scion_tc_05`; depois de carregar uma corrida, `live slot 1` passou a tC. A sessão continuou `COOP 2/8 CONNECTED`, serial 1.
+- **Limite do teste:** a troca de **modelo diferente** pela UI exige dois carros realmente possuídos no save. A injeção de uma segunda entrada crua na coleção local (`addgarage`/`setgarage`) fez o preview da garagem encerrar o runner (`[GARAGE-LIFE] preview construction`, ExitProcess). Esses comandos foram removidos. A UI real foi exercitada com versões, não com um segundo modelo comprado legalmente.
+- O aviso de HUD `Partner car change: applies on the next race or garage load` foi compilado, mas não conferido visualmente no último build.
+
+### Conclusão precisa
+
+- Troca por **próxima carga normal**: implementada e validada em duas cópias; sem reconectar.
+- Troca **instantânea**: não demonstrada. A criação de recurso novo está bloqueada pelo release; a reutilização de recurso pré-carregado é um caminho em aberto, não uma feature.
+- A ponte foi validada só com getters; construção de veículo, I/O, yield e substituição de objetos continuam sem prova de segurança. O caminho perigoso está desativado.

@@ -51,3 +51,7 @@ A etapa 1 foi validada ao vivo: o wrapper full-save chamou getters guest no ganc
 **Conclusão:** trocar o modelo em um mundo já carregado é impossível nesta build release, sem recarregar o mundo. Não é uma limitação da ponte (a ABI funciona), mas da ausência dos assets/criador de recurso de carro no release.
 
 **O que funciona sem reconectar:** a configuração diferente fica em NEXT e é aplicada no próximo carregamento normal (corrida/garagem). Testado com Eclipse: o host o viu na vaga 1 depois de carregar a corrida, com a sessão ainda conectada. O código final recusa a construção no mundo atual e preserva o veículo antigo.
+
+## Correção de escopo (20/10, após revisão do Codex)
+
+A conclusão anterior dizia "impossível". O correto é: **a criação de um recurso de carro novo em runtime está bloqueada no release** (`105AA0`/`2105F0` e a mensagem de assets), mas **não foi demonstrado** que um recurso já carregado em modo 1 não possa servir a um veículo completo de gameplay. O ramo `105B80`→`105BD6` reutiliza/rebinda um carData existente quando model index, modo e `entry+0x0A` coincidem; o factory offline usa modo 0, então não há correspondência hoje. Testar isso exigiria provar ownership, registro, compatibilidade e rollback; não foi implementado. A troca instantânea permanece **não demonstrada**, não impossível em geral.

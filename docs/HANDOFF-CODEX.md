@@ -171,3 +171,10 @@ Pedido do usuário: "só eu como host deveria poder iniciar as corridas e prosse
 - Comandos de diagnóstico adicionados ao canal de teste: `cars`, `garage`/`swapcar`, `swapfrom`, `localcar`. O teste usou `localcar` para simular a escolha da garagem, não a UI real.
 - `python tools/test_coop_memory.py`: PASS com `native.cpp` incluído e `Env` stub; `cmd /c mod\build.cmd`: PASS. Nenhuma regra de firewall/UAC foi criada; nenhum jogo/xrevive do usuário foi tocado. Sem commit/push e sem ZIP novo.
 - Próximo passo possível: aplicar a troca também quando a cópia entra/sai da garagem no fluxo real da UI, e validar a escolha de carro pela UI do parceiro. A limitação de recurso do release permanece para qualquer troca no mundo atual.
+
+## Continuação Claude, 20/10: UI real da garagem e correção de escopo
+
+- `LocalCarCfg` corrigido para espelhar `155920`: origem 1 lê o banco central (`0x541700 + index*0x108`), origem 0 lê a coleção local (`0x53F810 + 53F80D*0x108`); só publica com `mode==2`, não na garagem/front end. Teste sintético novo passou.
+- UI real exercitada em duas cópias: parceiro entrou na garagem pela pausa, Manage Vehicles, trocou a versão com stick direito, `Load Vehicle`/Yes e saiu; carro local virou tC e o host o aplicou após carregar a corrida (`live slot 1` tC). Sessão permaneceu conectada, serial 1.
+- Limite: a troca de **modelo diferente** pela UI exige dois carros realmente possuídos. Injetar uma segunda entrada crua na coleção fez o preview da garagem encerrar o runner; os comandos `addgarage`/`setgarage` foram removidos. A UI real foi validada com versões, não com segundo modelo comprado.
+- Correção: `105AA0` lê CURRENT+0x10F, escrito por `268D97` (`268D80`) no NEXT durante a preparação da carga; a mensagem de release aparece na falha do loader `2105F0`/`2126C0`. `105B80` reutiliza/rebinda um carData existente no ramo `entry+0x0A != 0` → `105BD6` (`210630`/`105A40`), mas o factory offline usa modo 0 e as entradas existentes são modo 1. Troca instantânea permanece **não demonstrada**; não é "impossível em geral". O caminho perigoso segue desativado.

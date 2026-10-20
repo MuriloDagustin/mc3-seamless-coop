@@ -197,3 +197,13 @@ Isso confirma o caminho suportado: a troca de modelo é aplicada no próximo car
 - A simulação da escolha da garagem usou um comando de diagnóstico; a UI real da garagem não foi dirigida neste teste.
 - O jogo release não cria recursos de carro em runtime; a mensagem e o encerramento observados são a prova. Um build beta/debug poderia permitir o construtor, mas não é o produto.
 - Nenhum pacote/ZIP foi regenerado; o ZIP entregue continua no protocolo anterior.
+
+## UI real da garagem e correção de `LocalCarCfg` (20/10/2026)
+
+`LocalCarCfg` agora espelha `155920`: origem 1 → `0x541700 + index*0x108` (banco central); origem 0 → `0x53F810 + 53F80D*0x108` (coleção local). Só publica com `mode==2` (carreira/cruise/corrida), não na garagem (5) nem no front end (3). Teste sintético novo em `car_config_tests.inc` passou para os dois ramos e para a recusa em mode 5.
+
+Teste ao vivo com duas cópias: o parceiro entrou na garagem pela UI real (pausa → Go to Garage → Yes), abriu Manage Vehicles, trocou a versão com o **stick direito**, confirmou `A` → `Load Vehicle` → `Yes` e saiu. O carro local dele mudou para `vp_d_scion_tc_05`; o host recebeu a configuração e, após carregar uma corrida, `live slot 1` passou a `vp_d_scion_tc_05`. As duas cópias permaneceram `COOP 2/8 CONNECTED`, serial 1, mesma corrida.
+
+**Limite:** a UI real foi exercitada com duas versões (a coleção local), não com um segundo modelo comprado legalmente. A injeção de uma segunda entrada crua na coleção (`addgarage`/`setgarage`) fez o preview da garagem encerrar o runner (`[GARAGE-LIFE] preview construction`, ExitProcess), então esses comandos foram removidos. O aviso novo de HUD foi compilado, mas não conferido visualmente.
+
+Correção da conclusão: a troca **instantânea** continua **não demonstrada**. O release bloqueia a criação de recurso novo; a reutilização de um carData já carregado (modo 1, ramo `105BD6`/`210630`) é um caminho em aberto que exigiria prova de ownership/registro/compatibilidade. A ponte foi validada apenas com getters; construção/IO/yield não estão provados.

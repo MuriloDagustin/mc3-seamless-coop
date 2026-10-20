@@ -62,3 +62,7 @@ O pool `[50A08C]` tem 16 entradas; na ronda só o modelo em uso estava em modo 0
 **Caminho suportado, sem reconectar:** a configuração diferente continua em NEXT e é aplicada no próximo carregamento normal (corrida/garagem). Teste: parceiro trocou a garagem para Eclipse, host ainda mostrava tC; após o host carregar uma corrida, `live slot 1` passou a Eclipse, com as duas cópias conectadas. Não é troca instantânea no mundo atual.
 
 O teste usou o comando de diagnóstico `localcar`, não a UI da garagem. Nenhum novo ZIP foi gerado.
+
+## Correção de escopo (20/10)
+
+A criação de recurso novo no release está bloqueada, mas a reutilização de recurso já carregado (modo 1) não foi demonstrada nem descartada. `105B80` tem o ramo `entry+0x0A != 0` → `105BD6`, que libera/rebinda `entry+0x0C` com `210630`/`105A40`; é reutilização de carData existente, não criação de arquivo. O factory offline passa modo 0, então não encontra as entradas modo 1. Forçar/copiar entradas exigiria provar ownership, registro, compatibilidade e rollback; nada disso foi feito. Portanto: troca instantânea **não demonstrada**; próxima carga normal validada.

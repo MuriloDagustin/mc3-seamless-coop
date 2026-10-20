@@ -32,6 +32,7 @@ constexpr uint32_t kSetupHumans = 0x4C, kSetupViews = 0x50, kSetupNetwork = 0x10
 constexpr uint32_t kSlot = 0x114, kSlotSize = 0x2C;  // slot i at setup + 0x114 + i * 0x2C
 constexpr uint32_t kSlotCar = 0x0C, kSlotPad = 0x10, kSlotHud = 0x14, kSlotPlayer = 0x18, kSlotOut = 0x26;
 constexpr uint32_t kGarage = 0x53F810, kGarageCount = 0x53F80C, kGarageSelected = 0x53F80D;
+constexpr uint32_t kSelectOrigin = 0x53F2FC, kSelectIndex = 0x53F2FE, kCarDatabase = 0x541700;
 
 bool Ptr(uint32_t va) { return va >= 0x10000 && Mapped(va, 4); }
 
@@ -313,10 +314,22 @@ bool Local(Pose& out) {
 }
 
 bool LocalCarCfg(uint8_t out[kCarCfgBytes]) {
-    if (!Ptr(kGarageCount)) return false;
-    uint8_t count = G<uint8_t>(kGarageCount), selected = G<uint8_t>(kGarageSelected);
-    if (!count || selected >= 30) return false;
-    uint32_t cfg = kGarage + uint32_t(selected) * kCarCfgBytes;
+    // The career garage commits the choice on returning to the world (mode 2). While the player is browsing the
+    // garage/front end (mode 5/3), do not publish a preview as the partner's car.
+    if (!Ptr(kMode) || R32(kMode) != 2) return false;
+    uint32_t cfg = 0;
+    // 155920: origin 1 is the central car database indexed by the selected model; origin 0 is the local
+    // garage collection indexed by 53F80D. Reading only 53F810/53F80D misses a car chosen from the database.
+    if (Ptr(kSelectOrigin) && G<uint8_t>(kSelectOrigin)) {
+        int16_t index = Ptr(kSelectIndex) ? G<int16_t>(kSelectIndex) : -1;
+        if (index < 0 || !Mapped(kCarDatabase, 4)) return false;
+        cfg = kCarDatabase + uint32_t(index) * kCarCfgBytes;
+    } else {
+        if (!Ptr(kGarageCount)) return false;
+        uint8_t count = G<uint8_t>(kGarageCount), selected = G<uint8_t>(kGarageSelected);
+        if (!count || selected >= count || selected >= 30) return false;
+        cfg = kGarage + uint32_t(selected) * kCarCfgBytes;
+    }
     if (!Mapped(cfg, kCarCfgBytes)) return false;
     std::memcpy(out, HostPtr(cfg), kCarCfgBytes);
     return ValidConfig(out);

@@ -128,5 +128,16 @@ void CarConfigTests() {
     car::OnPartnerCar(1,different.data(),0xFFFFFFFD);assert(car::g_remote[1].revision==revision);
     car::OnPartnerCar(1,different.data(),0);assert(car::g_remote[1].revision==revision+1);
     car::Remove(1);car::OnPartnerCar(1,updated.data(),1);Tick();assert(car::g_remote[1].cfg_sequence==1);
-    puts("PASS: same-model dirty installation once; vtable/local-mask preservation; current/live model guard; NEXT staging/aliases; native new vehicle; packet order/wrap/reconnect; invalid/native-net guards.");
+    // LocalCarCfg mirrors 155920: origin 1 reads the central car database; origin 0 the local collection. The
+    // session only publishes a committed choice in career/cruise/race mode, not while browsing the garage.
+    CfgFixture();
+    W32(0x53F2D4,2);
+    G<uint8_t>(0x53F2FC)=0;G<uint8_t>(0x53F80C)=2;G<uint8_t>(0x53F80D)=1;
+    Put(0x53F810+0x108,ConfigFor("vp_d_garage_one"),0x445500);
+    Config out{};assert(car::LocalCarCfg(out.data())&&std::strcmp(reinterpret_cast<const char*>(out.data()+0xE3),"vp_d_garage_one")==0);
+    G<uint8_t>(0x53F2FC)=1;G<int16_t>(0x53F2FE)=7;
+    Put(0x541700+7*0x108,ConfigFor("vp_d_database_one"),0x445600);
+    assert(car::LocalCarCfg(out.data())&&std::strcmp(reinterpret_cast<const char*>(out.data()+0xE3),"vp_d_database_one")==0);
+    W32(0x53F2D4,5);assert(!car::LocalCarCfg(out.data()));
+    puts("PASS: same-model dirty installation once; vtable/local-mask preservation; current/live model guard; NEXT staging/aliases; native new vehicle; packet order/wrap/reconnect; invalid/native-net guards; local-car origin/mode selection.");
 }
