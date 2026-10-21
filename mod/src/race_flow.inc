@@ -4,6 +4,7 @@ std::array<After, 8> g_after_out{}, g_after_in{};
 uint32_t g_after_revision = 0, g_after_cursor = 0;
 uint64_t g_after_send_at = 0;
 bool g_result_hold = false, g_result_tail = false, g_result_neutral = false;
+bool g_result_advance = false, g_result_advance_neutral = false;
 bool g_result_loading = false, g_result_reset = false;
 uint32_t g_result_load_origin = 0, g_result_load_serial = 0;
 uint64_t g_result_load_at = 0;
@@ -41,6 +42,7 @@ void PublishAfter(uint32_t serial, AfterAction action, int city, const Start* ne
     g_after_out[serial % g_after_out.size()] = a;
     g_after_cursor = serial % uint32_t(g_after_out.size());
     g_after_send_at = 0;
+    Log("after: publish action %d serial %u revision %u", int(action), serial, a.revision);
 }
 
 const After* DecisionFor(uint32_t serial) {
@@ -61,6 +63,7 @@ void ResetFlowNetwork() {
     g_after_revision = g_after_cursor = 0; g_after_send_at = 0;
     g_result_pulse_at = 0;
     g_result_hold = g_result_tail = g_result_neutral = g_result_loading = false;
+    g_result_advance = g_result_advance_neutral = false;
     g_result_load_origin = g_result_load_serial = 0;
     g_result_load_at = 0;
     g_result_plan = {};
@@ -73,8 +76,19 @@ void PublishHostWaiting(const Start& start) {
 }
 
 void ObserveHostExit() {
+    static uint32_t logged = 0xFFFFFFFF;
     if (!g_active_start.serial || !g_active_ready || !g_bound_ran ||
-        (P(kMode) == 2 && !Cruise())) return;
+        (P(kMode) == 2 && !Cruise())) {
+        uint32_t why = (!g_active_start.serial ? 1u : 0u) | (!g_active_ready ? 2u : 0u) |
+                       (!g_bound_ran ? 4u : 0u) | (P(kMode) == 2 && !Cruise() ? 8u : 0u);
+        if (why != logged) {
+            logged = why;
+            Log("after: street not published yet (active=%u ready=%d bound=%d mode=%u cruise=%d why=%u)",
+                g_active_start.serial, int(g_active_ready), int(g_bound_ran), P(kMode), int(Cruise() != 0), why);
+        }
+        return;
+    }
+    logged = 0;
     After& old = g_after_out[g_active_start.serial % g_after_out.size()];
     if (old.serial == g_active_start.serial && old.action == AfterAction::Street) return;
     PublishAfter(g_active_start.serial, AfterAction::Street, g_active_start.city);
@@ -142,12 +156,18 @@ void ResultFlowTick(bool hosting, bool connected, uint64_t now) {
     if (!hold) {
         if (g_result_hold) g_result_tail = true;
         g_result_hold = false; g_result_plan = {};
+        const After* exit = DecisionFor(g_race_serial);
+        if (!(exit && exit->action == AfterAction::Street && RaceState() == 12))
+            g_result_advance = g_result_advance_neutral = false;
         return;
     }
     g_result_hold = true;
     g_notice = "Aguardando o host escolher o que fazer.";
     const After* a = DecisionFor(g_race_serial);
-    if (!a || a->action == AfterAction::Wait) return;
+    if (!a || a->action == AfterAction::Wait) {
+        g_result_advance = g_result_advance_neutral = false;
+        return;
+    }
     g_notice = a->action == AfterAction::Street ?
         "O host voltou para a rua. Aguardando a tela de saída do jogo." :
         "O host avançou. Preparando a próxima corrida.";
@@ -163,20 +183,49 @@ void ResultFlowTick(bool hosting, bool connected, uint64_t now) {
         quit = !NativeNextMatches(a->next);
     }
     if (RaceState() == 9 && (CanAdvanceTournamentResult() || CanDismissTournamentOverlay())) {
+        g_result_advance = g_result_advance_neutral = false;
         UiPlan plan{}; plan.button = 0x1000; plan.page = 9;
         QueueResultPulse(plan, *a, true, now);
         return;
     }
+    if (RaceState() == 8 || RaceState() == 10) {
+        // The partner is held at RESULTS (8) / rewards (10) by FilterResultInput. Once the host decided, one
+        // neutral A pulse per page advances the native screens to 12, where the quit/next plan runs.
+        g_result_advance = true;
+        return;
+    }
+    g_result_advance = g_result_advance_neutral = false;
     if (RaceState() != 12) return; // rewards10 and autosave11 complete natively
     if (a->action == AfterAction::Next && g_pending_setup.serial != a->next.serial) return;
     UiPlan plan{};
     if (PlanResultMenu(quit, plan)) QueueResultPulse(plan, *a, false, now, quit);
+    else if (quit) {
+        // The host returned to the street via the native default "Continue Career". The partner's result menu
+        // already has that item selected; if the strict quit plan cannot identify the list, one A pulse is the
+        // same native action the host used, not a fabricated menu.
+        g_result_advance = true;
+    }
 }
 
 bool FilterResultInput(uint16_t& buttons) {
+    if (g_result_advance && (RaceState() == 8 || RaceState() == 10 || RaceState() == 12)) {
+        uint64_t now = GetTickCount64();
+        if (now - g_result_pulse_at < 160) { buttons = 0; return true; }
+        if (!g_result_advance_neutral) {
+            g_result_advance_neutral = true;
+            buttons = 0;
+            return true;
+        }
+        g_result_advance_neutral = false;
+        g_result_pulse_at = now;
+        buttons = 0x1000;
+        return true;
+    }
     if (!g_result_hold) {
         if (g_result_tail && buttons) { buttons = 0; return true; }
         g_result_tail = false;
+        const After* exit = DecisionFor(g_race_serial);
+        if (exit && exit->action == AfterAction::Street && RaceState() == 12) g_result_advance = true;
         return false;
     }
     buttons = 0;

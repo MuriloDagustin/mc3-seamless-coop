@@ -803,6 +803,10 @@ void Tick(bool hosting, bool connected) {
         (loaded != g_bound_race || (g_bound_ended && state >= 2 && state <= 6))) {
         if (!(hosting && PublishHostSeries())) {
             Log("race: next race has no authoritative matching start, serial %u ends", g_race_serial);
+            // The host is leaving the finished race (street, garage or menus). Publish the Street decision here,
+            // before BeginRace(0) clears the active start, otherwise the partner waits forever at the result.
+            if (hosting && g_active_start.serial && g_active_ready && g_bound_ran)
+                PublishAfter(g_active_start.serial, AfterAction::Street, g_active_start.city);
             BeginRace(0);
             ai::SetRace(0, -1, -1, false);
         }
@@ -810,7 +814,12 @@ void Tick(bool hosting, bool connected) {
     if (loaded && g_race_serial && MatchesSharedRace()) {
         if (g_bound_race != loaded) g_bound_ran = g_bound_ended = false;
         g_bound_race = loaded;
-    } else if (!loaded) g_bound_race = 0, g_bound_ran = g_bound_ended = false;
+    } else if (!loaded) {
+        // Keep the finished race identity until ObserveHostExit has published Street. Resetting it on the first
+        // cruise tick (before the hook observes Cruise) left the partner waiting at the result forever.
+        if (!(hosting && g_active_start.serial && g_bound_ran))
+            g_bound_race = 0, g_bound_ran = g_bound_ended = false;
+    }
     if (loaded && loaded == g_bound_race) {
         if (state >= 2 && state <= 6 && !g_bound_ended) g_bound_ran = true;
         if (state >= 7 && g_bound_ran) g_bound_ended = true;
@@ -1018,11 +1027,14 @@ std::string GoToOpenRace(int index) {
 
 std::string Describe() {
     std::lock_guard lock(g_lock);
-    char s[512];
-    std::snprintf(s, sizeof s, "race_state=%d cruise=%d phase=%d start_in=%s partner_won=%d won_sent=%d prize=%d gate=%d gate_reason=%s terminal=%d/%d street_hold=%d result_wait=%d next_load=%u",
+    char s[768];
+    const After& ai = g_after_in[g_race_serial % g_after_in.size()];
+    const After& ao = g_after_out[g_race_serial % g_after_out.size()];
+    std::snprintf(s, sizeof s, "race_state=%d cruise=%d phase=%d start_in=%s partner_won=%d won_sent=%d prize=%d gate=%d gate_reason=%s terminal=%d/%d street_hold=%d result_wait=%d next_load=%u after_in=%u/%u/%d after_out=%u/%u/%d",
                   RaceState(), Cruise() != 0, g_phase, g_have_start ? g_start_in.name : "-", g_partner_won,
                   g_won_sent, g_partner_prize, int(g_gate), g_gate_reason, g_local_finished, g_peer_finished, g_street_guard != 0,
-                  g_result_hold, g_result_loading ? g_result_load_serial : 0);
+                  g_result_hold, g_result_loading ? g_result_load_serial : 0,
+                  ai.serial, ai.revision, int(ai.action), ao.serial, ao.revision, int(ao.action));
     return s;
 }
 
