@@ -199,10 +199,14 @@ void Apply(uint32_t s, const Car& c, float ahead) {
 
 void Capture(uint64_t now) {
     std::lock_guard lock(g_lock);
-    if (!Playable()) { g_source_tm = 0; g_publish.clear(); return; }
+    static uint32_t logged = 0;
+    auto note = [&](uint32_t state, const char* text) {
+        if (logged != state) { logged = state; Log("traffic: capture %s", text); }
+    };
+    if (!Playable()) { note(1, "off (not playable)"); g_source_tm = 0; g_publish.clear(); return; }
     if (now < g_sent_at || now - g_sent_at < kSendMs) return;
     Pool p;
-    if (!ReadPool(p)) { g_publish.clear(); return; }
+    if (!ReadPool(p)) { note(2, "off (pool not ready)"); g_publish.clear(); return; }
     if (p.tm != g_source_tm || p.slots != g_source_slots || p.race != g_source_race || p.world != g_source_world) {
         if (!++g_epoch) ++g_epoch;
         g_source_tm = p.tm; g_source_slots = p.slots; g_source_race = p.race; g_source_world = p.world;
@@ -210,12 +214,16 @@ void Capture(uint64_t now) {
     std::vector<Car> cars(size_t(p.n));
     for (int i = 0; i < p.n; i++) {
         uint32_t s = p.slots + uint32_t(i) * kSlotSize;
-        if (!ReadCar(s, uint16_t(i), cars[size_t(i)])) { g_publish.clear(); return; }
+        if (!ReadCar(s, uint16_t(i), cars[size_t(i)])) { note(3, "off (slot read failed)"); g_publish.clear(); return; }
     }
     // Avoid publishing a mixed pool while the session thread samples a load/reset.
     Pool after;
     if (!Playable() || !ReadPool(after) || after.tm != p.tm || after.slots != p.slots ||
-        after.race != p.race || after.layout != p.layout || after.world != p.world) { g_publish.clear(); return; }
+        after.race != p.race || after.layout != p.layout || after.world != p.world) {
+        note(4, "off (pool changed during capture)");
+        g_publish.clear(); return;
+    }
+    note(5, "on");
     g_sent_at = now;
     int chunks = int((cars.size() + kCarsPerPacket - 1) / kCarsPerPacket);
     if (!chunks) chunks = 1;
@@ -234,8 +242,14 @@ void Capture(uint64_t now) {
 }
 
 bool Snapshot(std::vector<std::vector<uint8_t>>& packets, uint64_t now) {
+    (void)now;
     std::lock_guard lock(g_lock);
-    if (g_publish.empty() || g_published_cycle == g_cycle || now < g_sent_at || now-g_sent_at >= kStaleMs) return false;
+    // Capture timestamps come from GetTickCount64 on the game thread. The session thread uses steady_clock for
+    // protocol timers, so comparing its `now` with g_sent_at rejected every snapshot (traffic stayed off). Use the
+    // same clock as Capture here; pose interpolation keeps its own offset conversion.
+    uint64_t clock = GetTickCount64();
+    if (g_publish.empty() || g_published_cycle == g_cycle || clock < g_sent_at || clock - g_sent_at >= kStaleMs)
+        return false;
     packets = g_publish; g_published_cycle = g_cycle;
     return true;
 }
@@ -244,10 +258,15 @@ void Receive(const uint8_t* data, int bytes) {
     if (!data || bytes < int(sizeof(Header))) return;
     Header h;
     std::memcpy(&h, data, sizeof h);
+    static uint32_t logged_epoch = 0, logged_reject = 0;
     if (h.version != 2 || h.pad[0] || h.pad[1] || !h.epoch || !h.cycle ||
         bytes != int(sizeof h + h.cars * sizeof(Car)) || !h.count || h.count > 1024 ||
         h.chunks != (h.count + kCarsPerPacket - 1) / kCarsPerPacket || h.chunk >= h.chunks ||
-        h.cars != std::min(kCarsPerPacket, int(h.count) - int(h.chunk)*kCarsPerPacket)) return;
+        h.cars != std::min(kCarsPerPacket, int(h.count) - int(h.chunk)*kCarsPerPacket)) {
+        if (!logged_reject) { logged_reject = 1; Log("traffic: recv rejected a malformed packet (%d bytes)", bytes); }
+        return;
+    }
+    logged_reject = 0;
     std::vector<Car> incoming(h.cars);
     std::memcpy(incoming.data(), data + sizeof h, incoming.size()*sizeof(Car));
     for (unsigned i = 0; i < incoming.size(); i++)
@@ -272,6 +291,11 @@ void Receive(const uint8_t* data, int bytes) {
     g_remote.resize(h.count);
     for (unsigned i = 0; i < h.count; i++) g_remote[i] = {g_pending.cars[i], now};
     g_host_layout = h.layout; g_ready = h; g_ready_at = now; g_pending = {};
+    if (logged_epoch != h.epoch) {
+        logged_epoch = h.epoch;
+        Log("traffic: received batch epoch=%u cycle=%u cars=%u layout=%08X world=%08X", h.epoch, h.cycle, h.count,
+            h.layout, h.world);
+    }
 }
 
 void Tick(bool partner, uint64_t now) {
@@ -416,12 +440,15 @@ std::string Describe() {
     std::snprintf(s, sizeof s,
         "traffic=%s shown=%d hidden=%d host_cars=%zu pool_ready=%d pool=%d spawned=%d roads=%d wrecks=%d "
         "spawn_gate=%d frozen=%d target=%d humans=%u views=%d native_net=%d session=%d/%d regions=%u links=%u "
-        "physics=%d trailers=%d bodies=%d proxies=%d blocked=%d epoch=%u cycle=%u",
+        "physics=%d trailers=%d bodies=%d proxies=%d blocked=%d epoch=%u cycle=%u "
+        "publish=%zu source_tm=%08X sent=%llu layout=%08X host_layout=%08X ready=%u/%u",
         g_active ? "on" : (ready && !spawned && !g_remote.empty() ? "waiting_spawn" : "off"),
         g_shown, g_hidden, g_remote.size(), ready, p.n, spawned, roads, wrecks,
         byte(0x4AFCCC), tm ? byte(tm + 0x144) : -1, target, P(setup + 0x4C), views,
         setup ? byte(setup + 0x108) : -1, int32_t(P(session + 0x10)), int32_t(P(session + 0x18)),
-        P(regions + 0x18), links, PhysicsEnabled(), g_trailers, g_bodies, g_proxies, g_blocked, g_ready.epoch, g_ready.cycle);
+        P(regions + 0x18), links, PhysicsEnabled(), g_trailers, g_bodies, g_proxies, g_blocked, g_ready.epoch, g_ready.cycle,
+        g_publish.size(), g_source_tm, (unsigned long long)g_sent_at, ready ? p.layout : 0, g_host_layout,
+        g_ready.epoch, g_ready.cycle);
     return s;
 }
 

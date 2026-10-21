@@ -207,3 +207,16 @@ Teste ao vivo com duas cópias: o parceiro entrou na garagem pela UI real (pausa
 **Limite:** a UI real foi exercitada com duas versões (a coleção local), não com um segundo modelo comprado legalmente. A injeção de uma segunda entrada crua na coleção (`addgarage`/`setgarage`) fez o preview da garagem encerrar o runner (`[GARAGE-LIFE] preview construction`, ExitProcess), então esses comandos foram removidos. O aviso novo de HUD foi compilado, mas não conferido visualmente.
 
 Correção da conclusão: a troca **instantânea** continua **não demonstrada**. O release bloqueia a criação de recurso novo; a reutilização de um carData já carregado (modo 1, ramo `105BD6`/`210630`) é um caminho em aberto que exigiria prova de ownership/registro/compatibilidade. A ponte foi validada apenas com getters; construção/IO/yield não estão provados.
+
+## Correção da sincronização de tráfego (20/10/2026)
+
+**Causa:** `traffic::Capture` grava `g_sent_at` com o relógio da thread do jogo (`GetTickCount64`), mas `traffic::Snapshot` comparava esse valor com o `now` da thread de sessão, que vem de `NowMs()` (`steady_clock`). Como os dois relógios têm origens diferentes, `now < g_sent_at` era praticamente sempre verdadeiro e `Snapshot` devolvia `false`: o host capturava (`publish=6`) mas não enviava nenhum pacote de tráfego.
+
+**Correção:** `Snapshot` agora usa `GetTickCount64()` internamente para a validade/frescor, o mesmo relógio de `Capture`. O parâmetro `now` da sessão é ignorado nessa comparação.
+
+Teste ao vivo (duas cópias, ronda):
+- host: `traffic: capture on`, `session: sending traffic snapshot (6 chunks)`;
+- parceiro: `session: traffic packet received (1292 bytes)`, `traffic: received batch epoch=1 cycle=1 cars=48 layout=AE7B8A19`, `traffic: syncing 48 cars with the host`;
+- estado: parceiro `traffic=on shown=48 host_cars=48`, layouts iguais;
+- `python tools/traffic_test.py 10`: pool 48/48, 48 ativos, 48 dentro de 3 m, pior erro 1,1 m, nenhum não spawnado.
+- Regressão sintética nova em `traffic_memory_tests.inc`: `Capture(test_now)` seguido de `Snapshot(..., 1)` deve publicar; a segunda chamada no mesmo ciclo não.

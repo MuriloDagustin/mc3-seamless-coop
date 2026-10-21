@@ -409,8 +409,11 @@ void Receive(uint64_t now) {
                 }
                 break;
             case kTraffic:
-                if (source == 0 && g_cfg.role == Role::Join)
+                if (source == 0 && g_cfg.role == Role::Join) {
+                    static int logged_traffic_rx = 0;
+                    if (logged_traffic_rx < 5) { logged_traffic_rx++; LOGR("session: traffic packet received (%d bytes)", n); }
                     mod::traffic::Receive(in.raw + sizeof(Header), n - int(sizeof(Header)));
+                }
                 break;
             case kAfter:
                 if (source == 0 && g_cfg.role == Role::Join && n == int(sizeof(AfterPacket))) {
@@ -486,6 +489,8 @@ void Send(uint64_t now) {
     }
     static std::vector<std::vector<uint8_t>> traffic;
     if (g_cfg.role == Role::Host && PlayerCount() > 1 && mod::traffic::Snapshot(traffic, now)) {
+        static int logged_traffic = 0;
+        if (logged_traffic < 5) { logged_traffic++; LOGR("session: sending traffic snapshot (%zu chunks)", traffic.size()); }
         Packet out;
         for (auto& chunk : traffic) {
             if (sizeof(Header) + chunk.size() > sizeof out.raw) continue;

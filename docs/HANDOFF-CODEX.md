@@ -178,3 +178,9 @@ Pedido do usuário: "só eu como host deveria poder iniciar as corridas e prosse
 - UI real exercitada em duas cópias: parceiro entrou na garagem pela pausa, Manage Vehicles, trocou a versão com stick direito, `Load Vehicle`/Yes e saiu; carro local virou tC e o host o aplicou após carregar a corrida (`live slot 1` tC). Sessão permaneceu conectada, serial 1.
 - Limite: a troca de **modelo diferente** pela UI exige dois carros realmente possuídos. Injetar uma segunda entrada crua na coleção fez o preview da garagem encerrar o runner; os comandos `addgarage`/`setgarage` foram removidos. A UI real foi validada com versões, não com segundo modelo comprado.
 - Correção: `105AA0` lê CURRENT+0x10F, escrito por `268D97` (`268D80`) no NEXT durante a preparação da carga; a mensagem de release aparece na falha do loader `2105F0`/`2126C0`. `105B80` reutiliza/rebinda um carData existente no ramo `entry+0x0A != 0` → `105BD6` (`210630`/`105A40`), mas o factory offline usa modo 0 e as entradas existentes são modo 1. Troca instantânea permanece **não demonstrada**; não é "impossível em geral". O caminho perigoso segue desativado.
+
+## Correção do tráfego (20/10): relógios diferentes
+
+O tráfego não era enviado: `traffic::Capture` marcava `g_sent_at` com `GetTickCount64` (thread do jogo), mas `traffic::Snapshot` comparava com o `now` da sessão (`steady_clock` em `NowMs`). A comparação `now < g_sent_at` rejeitava todas as publicações; o host tinha `publish=6`, mas a sessão não mandava pacotes. Corrigido usando `GetTickCount64()` dentro de `Snapshot`.
+
+Validado ao vivo em duas cópias: host envia 6 chunks; parceiro recebe lote de 48 carros, `traffic=on shown=48 host_cars=48`, layouts iguais. `python tools/traffic_test.py 10`: 48/48 ativos dentro de 3 m, pior 1,1 m. Teste sintético novo cobre o relógio cruzado. Logs de diagnóstico de captura/recepção incluídos (limitados a 5/envio e por época).

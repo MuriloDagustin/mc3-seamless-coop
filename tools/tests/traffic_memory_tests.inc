@@ -146,6 +146,10 @@ void TrafficMemoryTests() {
     TFixture();test_now+=60;traffic::Capture(test_now);G<float>(slots+0x58)=800;
     Packets captured;assert(traffic::Snapshot(captured,test_now));Near(ReadRecord(captured[0]).pos[0],100);
     assert(!traffic::Snapshot(captured,test_now));
+    // The session thread passes steady_clock while Capture stamps GetTickCount64. Snapshot must use Capture's clock,
+    // not the caller's, or every traffic publication is rejected (the real regression that left traffic off).
+    TFixture();test_now+=60;traffic::Capture(test_now);
+    Packets crossed;assert(traffic::Snapshot(crossed,1));assert(!traffic::Snapshot(crossed,1));
     // A transient invalid pool must not lose ownership and leave a scripted puppet stuck after disconnect.
     TFixture();packets=Snapshot();Apply(packets);G<uint16_t>(traffic_tm+0x34)=0;
     traffic::Stop();before=ram;traffic::Tick(false,test_now);assert(ram==before);
