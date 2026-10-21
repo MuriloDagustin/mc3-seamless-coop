@@ -26,6 +26,8 @@ bool PatchImport(const char* dll, const char* name, void* to, void** old);  // i
 void FakeFocus();
 void FakeKeys();                 // test copies: GetAsyncKeyState/GetKeyState answer the channel's keys
 void PressKey(int vk, int ms);   // the test copy's window gets the key down, then up  // test copies: the runner sees its window in front and visible (focus.cpp)
+bool ManualMode();               // a visible copy for a human: no virtual pad, no fake focus/keys
+void SetManualMode(bool on);
 std::string Shot(const std::wstring& path);  // the game window as a BMP: "ok" or "error ..."
 
 template <typename T>

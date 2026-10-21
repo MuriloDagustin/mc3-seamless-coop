@@ -215,7 +215,7 @@ extern "C" DWORD WINAPI ProxyXInputGetState(DWORD user, XINPUT_STATE* state) {
     g_xinput_ret = reinterpret_cast<uintptr_t>(_ReturnAddress());
     if (guest) g_xinput_guest++, mod::game::FiberTick();
     DWORD r;
-    if (mod::control::Enabled()) r = VirtualState(user, state);
+    if (mod::control::Enabled() && !mod::ManualMode()) r = VirtualState(user, state);
     else {
         auto f = REAL(DWORD(WINAPI*)(DWORD, XINPUT_STATE*), "XInputGetState");
         r = f ? f(user, state) : ERROR_DEVICE_NOT_CONNECTED;
@@ -235,7 +235,7 @@ extern "C" DWORD WINAPI ProxyXInputGetState(DWORD user, XINPUT_STATE* state) {
 extern "C" DWORD WINAPI ProxyXInputGetStateEx(DWORD user, XINPUT_STATE* state) {  // ordinal 100: with the guide button
     g_xinput_calls++;
     g_xinput_ret = reinterpret_cast<uintptr_t>(_ReturnAddress()) | 1;  // odd: from the Ex entry
-    if (mod::control::Enabled()) return VirtualState(user, state);
+    if (mod::control::Enabled() && !mod::ManualMode()) return VirtualState(user, state);
     auto f = REAL(DWORD(WINAPI*)(DWORD, XINPUT_STATE*), MAKEINTRESOURCEA(100));
     DWORD r = f ? f(user, state) : ERROR_DEVICE_NOT_CONNECTED;
     mod::game::Pad(user, r == ERROR_SUCCESS ? state : nullptr);
@@ -243,7 +243,7 @@ extern "C" DWORD WINAPI ProxyXInputGetStateEx(DWORD user, XINPUT_STATE* state) {
 }
 
 extern "C" DWORD WINAPI ProxyXInputSetState(DWORD user, XINPUT_VIBRATION* vibration) {
-    if (mod::control::Enabled()) return user == 0 ? ERROR_SUCCESS : ERROR_DEVICE_NOT_CONNECTED;  // no rumble for tests
+    if (mod::control::Enabled() && !mod::ManualMode()) return user == 0 ? ERROR_SUCCESS : ERROR_DEVICE_NOT_CONNECTED;  // no rumble for tests
     auto f = REAL(DWORD(WINAPI*)(DWORD, XINPUT_VIBRATION*), "XInputSetState");
     return f ? f(user, vibration) : ERROR_DEVICE_NOT_CONNECTED;
 }
@@ -260,14 +260,14 @@ static DWORD VirtualCaps(DWORD user, XINPUT_CAPABILITIES* caps) {
 }
 
 extern "C" DWORD WINAPI ProxyXInputGetCapabilities(DWORD user, DWORD flags, XINPUT_CAPABILITIES* caps) {
-    if (mod::control::Enabled()) return VirtualCaps(user, caps);
+    if (mod::control::Enabled() && !mod::ManualMode()) return VirtualCaps(user, caps);
     auto f = REAL(DWORD(WINAPI*)(DWORD, DWORD, XINPUT_CAPABILITIES*), "XInputGetCapabilities");
     return f ? f(user, flags, caps) : ERROR_DEVICE_NOT_CONNECTED;
 }
 
 // ordinal 108, XInputGetCapabilitiesEx(1, user, flags, XINPUT_CAPABILITIES_EX*): the caps then vendor/product ids
 extern "C" DWORD WINAPI ProxyXInputGetCapabilitiesEx(DWORD a, DWORD user, DWORD flags, void* caps) {
-    if (mod::control::Enabled()) {
+    if (mod::control::Enabled() && !mod::ManualMode()) {
         if (user != 0) return ERROR_DEVICE_NOT_CONNECTED;
         std::memset(caps, 0, sizeof(XINPUT_CAPABILITIES) + 8);
         VirtualCaps(0, static_cast<XINPUT_CAPABILITIES*>(caps));
@@ -285,7 +285,7 @@ extern "C" void WINAPI ProxyXInputEnable(BOOL enable) {
 }
 
 extern "C" DWORD WINAPI ProxyXInputGetBatteryInformation(DWORD user, BYTE type, XINPUT_BATTERY_INFORMATION* info) {
-    if (mod::control::Enabled()) {
+    if (mod::control::Enabled() && !mod::ManualMode()) {
         if (user != 0) return ERROR_DEVICE_NOT_CONNECTED;
         info->BatteryType = BATTERY_TYPE_WIRED, info->BatteryLevel = BATTERY_LEVEL_FULL;
         return ERROR_SUCCESS;
@@ -295,7 +295,7 @@ extern "C" DWORD WINAPI ProxyXInputGetBatteryInformation(DWORD user, BYTE type, 
 }
 
 extern "C" DWORD WINAPI ProxyXInputGetKeystroke(DWORD user, DWORD reserved, PXINPUT_KEYSTROKE key) {
-    if (mod::control::Enabled()) return user == 0 ? ERROR_EMPTY : ERROR_DEVICE_NOT_CONNECTED;
+    if (mod::control::Enabled() && !mod::ManualMode()) return user == 0 ? ERROR_EMPTY : ERROR_DEVICE_NOT_CONNECTED;
     auto f = REAL(DWORD(WINAPI*)(DWORD, DWORD, PXINPUT_KEYSTROKE), "XInputGetKeystroke");
     return f ? f(user, reserved, key) : ERROR_DEVICE_NOT_CONNECTED;
 }

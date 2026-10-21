@@ -22,11 +22,12 @@ bool Ours(HWND h) {
 }
 
 HWND WINAPI Foreground() {
+    if (ManualMode()) return g_foreground ? g_foreground() : nullptr;
     HWND w = GameWindow();
     return w ? w : g_foreground();
 }
-BOOL WINAPI Iconic(HWND h) { return Ours(h) ? FALSE : g_iconic(h); }
-BOOL WINAPI Visible(HWND h) { return Ours(h) ? TRUE : g_visible(h); }
+BOOL WINAPI Iconic(HWND h) { return ManualMode() ? g_iconic(h) : (Ours(h) ? FALSE : g_iconic(h)); }
+BOOL WINAPI Visible(HWND h) { return ManualMode() ? g_visible(h) : (Ours(h) ? TRUE : g_visible(h)); }
 }  // namespace
 
 void FakeFocus() {
@@ -50,8 +51,8 @@ std::atomic<uint64_t> g_key_until{0};
 
 uint64_t Now() { return GetTickCount64(); }
 bool Held(int vk) { return vk && vk == g_key && Now() < g_key_until; }
-SHORT WINAPI AsyncKey(int vk) { return Held(vk) ? SHORT(0x8001) : g_async(vk); }
-SHORT WINAPI KeyState(int vk) { return Held(vk) ? SHORT(0x8000) : g_state(vk); }
+SHORT WINAPI AsyncKey(int vk) { return ManualMode() || !Held(vk) ? g_async(vk) : SHORT(0x8001); }
+SHORT WINAPI KeyState(int vk) { return ManualMode() || !Held(vk) ? g_state(vk) : SHORT(0x8000); }
 }  // namespace
 
 void FakeKeys() {

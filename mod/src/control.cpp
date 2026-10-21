@@ -44,6 +44,7 @@ namespace mod::control {
 namespace {
 
 bool g_enabled = false;
+std::atomic<bool> g_manual{false};
 SOCKET g_sock = INVALID_SOCKET;
 
 struct Injected {
@@ -136,6 +137,10 @@ std::string Run(const std::string& text) {
     const std::string& c = a[0];
     char buf[256];
     if (c == "ping") return "pong";
+    if (c == "manual" && a.size() > 1) {
+        SetManualMode(a[1] == "on" || a[1] == "1");
+        return "ok";
+    }
     if (c == "base") {
         std::snprintf(buf, sizeof buf, "%p", g_base);
         return buf;
@@ -291,6 +296,8 @@ void Serve() {
 
 void Init() {
     int port = std::atoi(Env("MC3COOP_CONTROL").c_str());
+    g_manual = Env("MC3COOP_MANUAL") == "1";
+    if (g_manual) Log("ctl: manual mode from environment");
     if (port <= 0 || port > 65535) return;
     WSADATA wsa;
     WSAStartup(MAKEWORD(2, 2), &wsa);
@@ -309,6 +316,15 @@ void Init() {
 }
 
 bool Enabled() { return g_enabled; }
+bool ManualMode() { return g_manual.load(); }
+void SetManualMode(bool on) {
+    g_manual = on;
+    if (on) {
+        std::lock_guard lock(g_pad_lock);
+        g_pad = {};
+    }
+    Log("ctl: manual mode %s", on ? "on (real controller/keyboard)" : "off (virtual pad)");
+}
 
 bool Override(DWORD user, XINPUT_STATE* state) {
     if (!g_enabled) return false;
@@ -330,3 +346,8 @@ bool Override(DWORD user, XINPUT_STATE* state) {
 }
 
 }  // namespace mod::control
+
+namespace mod {
+bool ManualMode() { return control::ManualMode(); }
+void SetManualMode(bool on) { control::SetManualMode(on); }
+}  // namespace mod
